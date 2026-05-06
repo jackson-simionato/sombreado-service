@@ -17,7 +17,10 @@ def project_location_to_segments(*, lat: float, lng: float, segments: list[Route
     if not segments:
         raise ValueError("cannot project location without route segments")
 
-    candidate = min((_project_to_segment(lat=lat, lng=lng, segment=segment) for segment in segments), key=lambda item: item.distance_from_route_meters)
+    candidate = min(
+        (_project_to_segment(lat=lat, lng=lng, segment=segment) for segment in segments),
+        key=lambda item: item.distance_from_route_meters,
+    )
     distance_before_segment = candidate.segment.cumulative_distance_meters - candidate.segment.distance_meters
     cumulative = distance_before_segment + candidate.segment.distance_meters * candidate.fraction
     return ProjectedRoutePosition(

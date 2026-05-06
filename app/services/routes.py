@@ -22,7 +22,13 @@ class RouteReadService:
         radius_meters: float,
         limit: int,
     ) -> list[CandidateRouteDirection]:
-        logger.info("Finding nearby route directions lat=%s lng=%s radius_meters=%s limit=%s", lat, lng, radius_meters, limit)
+        logger.info(
+            "Finding nearby route directions lat=%s lng=%s radius_meters=%s limit=%s",
+            lat,
+            lng,
+            radius_meters,
+            limit,
+        )
         rows = await self._session.execute(
             text(
                 """
@@ -75,7 +81,12 @@ class RouteReadService:
         )
         return [CandidateRouteDirection.model_validate(row._mapping) for row in rows]
 
-    async def load_current_route_segments(self, *, route_version_id: UUID, route_direction_id: UUID) -> list[RouteSegment]:
+    async def load_current_route_segments(
+        self,
+        *,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> list[RouteSegment]:
         rows = await self._session.execute(
             text(
                 """
