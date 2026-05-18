@@ -25,7 +25,8 @@ class FakeRouteService:
                 route_version_id="00000000-0000-0000-0000-000000000002",
                 route_direction_id="00000000-0000-0000-0000-000000000003",
                 route_direction_sequence=1,
-                candidate_direction_label="Saida TICEN",
+                route_direction_name="Centro > Lagoa",
+                departure_labels=["Saida TICEN", "Saida Lagoa"],
                 distance_meters=18.5,
             )
         ]
@@ -83,7 +84,10 @@ async def test_nearby_route_directions_endpoint_uses_route_service():
         response = await client.get("/v1/nearby-route-directions", params={"lat": -27.6, "lng": -48.5})
 
     assert response.status_code == 200
-    assert response.json()["candidates"][0]["candidate_direction_label"] == "Saida TICEN"
+    candidate = response.json()["candidates"][0]
+    assert candidate["route_direction_name"] == "Centro > Lagoa"
+    assert candidate["departure_labels"] == ["Saida TICEN", "Saida Lagoa"]
+    assert "candidate_direction_label" not in candidate
 
 
 @pytest.mark.asyncio

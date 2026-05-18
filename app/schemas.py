@@ -20,6 +20,30 @@ class SunPosition(BaseModel):
     elevation: float
 
 
+class LightweightRouteDirection(BaseModel):
+    route_direction_id: UUID
+    sequence: int
+    name: str
+    departure_labels: list[str] = Field(default_factory=list)
+
+
+class RouteSummary(BaseModel):
+    route_id: UUID
+    route_code: str
+    route_name: str
+    route_version_id: UUID
+    directions: list[LightweightRouteDirection] = Field(default_factory=list)
+    distance_meters: float | None = None
+
+
+class RoutesResponse(BaseModel):
+    routes: list[RouteSummary]
+
+
+class RouteDirectionsResponse(BaseModel):
+    directions: list[LightweightRouteDirection]
+
+
 class CandidateRouteDirection(BaseModel):
     route_id: UUID
     route_code: str
@@ -27,7 +51,8 @@ class CandidateRouteDirection(BaseModel):
     route_version_id: UUID
     route_direction_id: UUID
     route_direction_sequence: int
-    candidate_direction_label: str
+    route_direction_name: str
+    departure_labels: list[str] = Field(default_factory=list)
     distance_meters: float
 
 
@@ -42,6 +67,12 @@ class RouteSegment(BaseModel):
     bearing_degrees: float
     distance_meters: float
     cumulative_distance_meters: float
+
+
+class RouteGeometryResponse(BaseModel):
+    route_version_id: UUID
+    route_direction_id: UUID
+    segments: list[RouteSegment]
 
 
 class SegmentForAdvisory(BaseModel):
