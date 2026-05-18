@@ -122,6 +122,43 @@ async def test_list_current_routes_rejects_partial_location_filter():
     assert session.calls == []
 
 
+async def test_load_current_route_returns_none_when_not_found():
+    session = FakeSession(FakeResult([]))
+    service = RouteReadService(session)
+
+    route = await service.load_current_route(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert route is None
+    assert "r.id = :route_id" in session.calls[0][0]
+
+
+async def test_load_current_route_directions_maps_labels():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_code="110",
+                    route_name="TICEN - Lagoa",
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    distance_meters=None,
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    route_direction_sequence=1,
+                    route_direction_name="Centro > Lagoa",
+                    departure_labels=["Saida TICEN"],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_current_route_directions(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert directions[0].name == "Centro > Lagoa"
+    assert directions[0].departure_labels == ["Saida TICEN"]
+    assert "r.id = :route_id" in session.calls[0][0]
+
+
 async def test_load_current_route_segments_maps_ordered_linestring_rows():
     session = FakeSession(
         FakeResult(

@@ -174,6 +174,53 @@ class RouteReadService:
         )
         return _route_summaries_from_rows(rows)
 
+    async def load_current_route(self, route_id: UUID) -> RouteSummary | None:
+        routes = await self._load_current_routes_by_id(route_id=route_id)
+        return routes[0] if routes else None
+
+    async def load_current_route_directions(self, route_id: UUID) -> list[LightweightRouteDirection]:
+        route = await self.load_current_route(route_id)
+        return route.directions if route else []
+
+    async def _load_current_routes_by_id(self, *, route_id: UUID) -> list[RouteSummary]:
+        rows = await self._session.execute(
+            text(
+                """
+                WITH direction_labels AS (
+                  SELECT
+                    rd.id AS route_direction_id,
+                    COALESCE(
+                      array_remove(array_agg(DISTINCT sd.departure_label ORDER BY sd.departure_label), NULL),
+                      ARRAY[]::text[]
+                    ) AS departure_labels
+                  FROM route_directions rd
+                  LEFT JOIN service_directions sd ON sd.route_direction_id = rd.id
+                  GROUP BY rd.id
+                )
+                SELECT
+                  r.id AS route_id,
+                  r.code AS route_code,
+                  r.name AS route_name,
+                  rv.id AS route_version_id,
+                  NULL::double precision AS distance_meters,
+                  rd.id AS route_direction_id,
+                  rd.sequence AS route_direction_sequence,
+                  rd.name AS route_direction_name,
+                  dl.departure_labels
+                FROM routes r
+                JOIN route_versions rv ON rv.route_id = r.id
+                JOIN route_directions rd ON rd.route_version_id = rv.id
+                JOIN direction_labels dl ON dl.route_direction_id = rd.id
+                WHERE r.is_current = true
+                  AND rv.is_current = true
+                  AND r.id = :route_id
+                ORDER BY rd.sequence ASC
+                """
+            ),
+            {"route_id": route_id},
+        )
+        return _route_summaries_from_rows(rows)
+
     async def load_current_route_segments(
         self,
         *,
