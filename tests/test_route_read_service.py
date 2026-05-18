@@ -34,7 +34,8 @@ async def test_find_nearby_route_directions_maps_read_contract_rows():
                     route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
                     route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
                     route_direction_sequence=1,
-                    candidate_direction_label="Saida TICEN",
+                    route_direction_name="Centro > Lagoa",
+                    departure_labels=["Saida TICEN", "Saida Lagoa"],
                     distance_meters=18.5,
                 )
             ]
@@ -44,7 +45,9 @@ async def test_find_nearby_route_directions_maps_read_contract_rows():
 
     candidates = await service.find_nearby_route_directions(lat=-27.6, lng=-48.5, radius_meters=100, limit=10)
 
-    assert candidates[0].candidate_direction_label == "Saida TICEN"
+    assert candidates[0].route_direction_name == "Centro > Lagoa"
+    assert candidates[0].departure_labels == ["Saida TICEN", "Saida Lagoa"]
+    assert "array_agg" in session.calls[0][0]
     assert "ST_DWithin" in session.calls[0][0]
     assert session.calls[0][1]["radius_meters"] == 100
 

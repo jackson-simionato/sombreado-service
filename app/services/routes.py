@@ -52,12 +52,12 @@ class RouteReadService:
                   SELECT
                     rd.id AS route_direction_id,
                     COALESCE(
-                      MIN(sd.departure_label) FILTER (WHERE sd.departure_label IS NOT NULL),
-                      rd.name
-                    ) AS candidate_direction_label
+                      array_remove(array_agg(DISTINCT sd.departure_label ORDER BY sd.departure_label), NULL),
+                      ARRAY[]::text[]
+                    ) AS departure_labels
                   FROM route_directions rd
                   LEFT JOIN service_directions sd ON sd.route_direction_id = rd.id
-                  GROUP BY rd.id, rd.name
+                  GROUP BY rd.id
                 )
                 SELECT
                   r.id AS route_id,
@@ -66,7 +66,8 @@ class RouteReadService:
                   rv.id AS route_version_id,
                   rd.id AS route_direction_id,
                   rd.sequence AS route_direction_sequence,
-                  cl.candidate_direction_label,
+                  rd.name AS route_direction_name,
+                  cl.departure_labels,
                   ns.distance_meters
                 FROM nearby_segments ns
                 JOIN route_directions rd ON rd.id = ns.route_direction_id
