@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
 from app.services.routes import RouteReadService
 
 
@@ -102,6 +104,22 @@ async def test_list_current_routes_maps_summaries_with_inline_directions():
     assert "ST_DWithin" in statement
     assert params["query_pattern"] == "%110%"
     assert params["limit"] == 10
+
+
+async def test_list_current_routes_rejects_partial_location_filter():
+    session = FakeSession(FakeResult([]))
+    service = RouteReadService(session)
+
+    with pytest.raises(ValueError, match="lat, lng, and radius_meters must be provided together"):
+        await service.list_current_routes(
+            query=None,
+            lat=-27.6,
+            lng=None,
+            radius_meters=500,
+            limit=10,
+        )
+
+    assert session.calls == []
 
 
 async def test_load_current_route_segments_maps_ordered_linestring_rows():

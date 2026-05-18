@@ -91,7 +91,11 @@ class RouteReadService:
         radius_meters: float | None,
         limit: int,
     ) -> list[RouteSummary]:
-        has_location = lat is not None and lng is not None and radius_meters is not None
+        location_values = (lat, lng, radius_meters)
+        has_location = all(value is not None for value in location_values)
+        if any(value is not None for value in location_values) and not has_location:
+            raise ValueError("lat, lng, and radius_meters must be provided together")
+
         rows = await self._session.execute(
             text(
                 """
