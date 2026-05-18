@@ -1,11 +1,17 @@
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings_dependency
 from app.db import get_session
-from app.schemas import NearbyRouteDirectionsResponse
+from app.schemas import (
+    NearbyRouteDirectionsResponse,
+    RouteDirectionsResponse,
+    RoutesResponse,
+    RouteSummary,
+)
 from app.services.routes import RouteReadService
 
 router = APIRouter(prefix="/v1", tags=["routes"])
@@ -13,6 +19,52 @@ router = APIRouter(prefix="/v1", tags=["routes"])
 
 async def get_route_service(session: Annotated[AsyncSession, Depends(get_session)]) -> RouteReadService:
     return RouteReadService(session)
+
+
+@router.get("/routes", response_model=RoutesResponse)
+async def list_routes(
+    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+    settings: Annotated[Settings, Depends(get_settings_dependency)],
+    query: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
+    lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    lng: Annotated[float | None, Query(ge=-180, le=180)] = None,
+    radius_meters: Annotated[float | None, Query(gt=0, le=2000)] = None,
+    limit: Annotated[int | None, Query(gt=0, le=100)] = None,
+) -> RoutesResponse:
+    resolved_radius_meters = radius_meters
+    if lat is not None and lng is not None and resolved_radius_meters is None:
+        resolved_radius_meters = settings.nearby_radius_meters
+
+    routes = await route_service.list_current_routes(
+        query=query,
+        lat=lat,
+        lng=lng,
+        radius_meters=resolved_radius_meters,
+        limit=limit or settings.nearby_limit,
+    )
+    return RoutesResponse(routes=routes)
+
+
+@router.get("/routes/{route_id}", response_model=RouteSummary)
+async def route_detail(
+    route_id: UUID,
+    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+) -> RouteSummary:
+    route = await route_service.load_current_route(route_id)
+    if route is None:
+        raise HTTPException(status_code=404, detail="current route not found")
+    return route
+
+
+@router.get("/routes/{route_id}/directions", response_model=RouteDirectionsResponse)
+async def route_directions(
+    route_id: UUID,
+    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+) -> RouteDirectionsResponse:
+    directions = await route_service.load_current_route_directions(route_id)
+    if not directions:
+        raise HTTPException(status_code=404, detail="current route not found")
+    return RouteDirectionsResponse(directions=directions)
 
 
 @router.get("/nearby-route-directions", response_model=NearbyRouteDirectionsResponse)
