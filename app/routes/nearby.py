@@ -9,6 +9,7 @@ from app.db import get_session
 from app.schemas import (
     NearbyRouteDirectionsResponse,
     RouteDirectionsResponse,
+    RouteGeometryResponse,
     RoutesResponse,
     RouteSummary,
 )
@@ -70,6 +71,25 @@ async def route_directions(
     if not directions:
         raise HTTPException(status_code=404, detail="current route not found")
     return RouteDirectionsResponse(directions=directions)
+
+
+@router.get("/route-directions/{route_direction_id}/segments", response_model=RouteGeometryResponse)
+async def route_direction_segments(
+    route_direction_id: UUID,
+    route_version_id: Annotated[UUID, Query()],
+    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+) -> RouteGeometryResponse:
+    segments = await route_service.load_current_route_segments(
+        route_version_id=route_version_id,
+        route_direction_id=route_direction_id,
+    )
+    if not segments:
+        raise HTTPException(status_code=404, detail="current route direction geometry not found")
+    return RouteGeometryResponse(
+        route_version_id=route_version_id,
+        route_direction_id=route_direction_id,
+        segments=segments,
+    )
 
 
 @router.get("/nearby-route-directions", response_model=NearbyRouteDirectionsResponse)

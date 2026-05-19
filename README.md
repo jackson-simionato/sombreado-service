@@ -52,5 +52,22 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
 ## Public Endpoints
 
 - `GET /health/live`
+- `GET /v1/routes`
+  - Lists current route summaries.
+  - Query parameters:
+    - `query`: optional route code/name search.
+    - `lat`, `lng`, `radius_meters`: optional nearby route filter.
+    - `limit`: optional result limit, defaults to `10`, max `100`.
+- `GET /v1/routes/{route_id}`
+  - Returns one current route summary, including lightweight directions.
+- `GET /v1/routes/{route_id}/directions`
+  - Returns lightweight current directions for one route.
+- `GET /v1/route-directions/{route_direction_id}/segments?route_version_id={route_version_id}`
+  - Returns ordered current segment geometry for one selected route direction.
 - `GET /v1/nearby-route-directions`
+  - Returns nearby selectable route directions for advisory selection.
+  - Query parameters:
+    - `lat`, `lng`: required passenger location.
+    - `radius_meters`: optional search radius, defaults to `100`.
+    - `limit`: optional result limit, defaults to `10`, max `100`.
 - `POST /v1/onboard-advisories`

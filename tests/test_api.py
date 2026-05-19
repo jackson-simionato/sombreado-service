@@ -13,6 +13,7 @@ from app.schemas import (
     LightweightRouteDirection,
     OnboardAdvisoryResponse,
     ProjectedRoutePosition,
+    RouteSegment,
     RouteSummary,
 )
 
@@ -65,6 +66,20 @@ class FakeRouteService:
     async def load_current_route_directions(self, route_id):
         route = await self.load_current_route(route_id)
         return route.directions if route else []
+
+    async def load_current_route_segments(self, *, route_version_id, route_direction_id):
+        if str(route_direction_id) == "00000000-0000-0000-0000-000000000003":
+            return [
+                RouteSegment(
+                    id="00000000-0000-0000-0000-000000000004",
+                    sequence=1,
+                    coordinates=[(-48.5, -27.6), (-48.49, -27.6)],
+                    bearing_degrees=90,
+                    distance_meters=986,
+                    cumulative_distance_meters=986,
+                )
+            ]
+        return []
 
     async def find_nearby_route_directions(self, *, lat, lng, radius_meters, limit):
         return [
@@ -193,6 +208,23 @@ async def test_nearby_route_directions_endpoint_uses_route_service():
     assert candidate["route_direction_name"] == "Centro > Lagoa"
     assert candidate["departure_labels"] == ["Saida TICEN", "Saida Lagoa"]
     assert "candidate_direction_label" not in candidate
+
+
+@pytest.mark.asyncio
+async def test_route_direction_segments_endpoint_returns_current_geometry():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/route-directions/00000000-0000-0000-0000-000000000003/segments",
+            params={"route_version_id": "00000000-0000-0000-0000-000000000002"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["route_direction_id"] == "00000000-0000-0000-0000-000000000003"
+    assert body["segments"][0]["coordinates"] == [[-48.5, -27.6], [-48.49, -27.6]]
 
 
 @pytest.mark.asyncio
