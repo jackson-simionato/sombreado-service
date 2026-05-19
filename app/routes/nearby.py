@@ -31,8 +31,13 @@ async def list_routes(
     radius_meters: Annotated[float | None, Query(gt=0, le=2000)] = None,
     limit: Annotated[int | None, Query(gt=0, le=100)] = None,
 ) -> RoutesResponse:
+    location_values = (lat, lng, radius_meters)
+    has_location = lat is not None and lng is not None
+    if any(value is not None for value in location_values) and not has_location:
+        raise HTTPException(status_code=422, detail="lat, lng, and radius_meters must be provided together")
+
     resolved_radius_meters = radius_meters
-    if lat is not None and lng is not None and resolved_radius_meters is None:
+    if has_location and resolved_radius_meters is None:
         resolved_radius_meters = settings.nearby_radius_meters
 
     routes = await route_service.list_current_routes(

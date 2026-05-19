@@ -145,6 +145,18 @@ async def test_routes_endpoint_lists_current_routes_with_default_limit():
 
 
 @pytest.mark.asyncio
+async def test_routes_endpoint_rejects_partial_location_filter():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/routes", params={"lat": -27.6})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "lat, lng, and radius_meters must be provided together"
+
+
+@pytest.mark.asyncio
 async def test_route_detail_endpoint_returns_404_for_non_current_route():
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
