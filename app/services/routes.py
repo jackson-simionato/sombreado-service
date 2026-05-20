@@ -190,6 +190,7 @@ def _nearby_route_directions_statement():
 
 def _list_current_routes_statement(*, has_location: bool):
     user_point = _user_point_cte() if has_location else None
+    query_pattern = bindparam("query_pattern", type_=Text())
     distance = (
         func.min(func.ST_Distance(_geography(RouteSegmentRecord.geometry), user_point.c.geog)).label("distance_meters")
         if user_point is not None
@@ -211,9 +212,9 @@ def _list_current_routes_statement(*, has_location: bool):
             RouteRecord.is_current == true(),
             RouteVersionRecord.is_current == true(),
             or_(
-                bindparam("query_pattern").is_(None),
-                RouteRecord.code.ilike(bindparam("query_pattern")),
-                RouteRecord.name.ilike(bindparam("query_pattern")),
+                query_pattern.is_(None),
+                RouteRecord.code.ilike(query_pattern),
+                RouteRecord.name.ilike(query_pattern),
             ),
         )
     )

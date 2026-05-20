@@ -32,6 +32,12 @@ def _compiled_sql(statement) -> str:
     return str(statement.compile(dialect=dialect()))
 
 
+def _compiled_asyncpg_sql(statement) -> str:
+    from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
+
+    return str(statement.compile(dialect=PGDialect_asyncpg(paramstyle="numeric_dollar")))
+
+
 def _assert_core_statement(statement) -> str:
     assert not isinstance(statement, TextClause)
     return _compiled_sql(statement)
@@ -176,6 +182,22 @@ async def test_list_current_routes_without_location_skips_geospatial_filter():
     assert "ST_Distance" not in sql
     assert params["query_pattern"] is None
     assert params["limit"] == 10
+
+
+async def test_list_current_routes_without_query_types_null_search_parameter_for_asyncpg():
+    for location_params in (
+        {"lat": None, "lng": None, "radius_meters": None},
+        {"lat": -27.6, "lng": -48.5, "radius_meters": 500},
+    ):
+        session = FakeSession(FakeResult([]))
+        service = RouteReadService(session)
+
+        await service.list_current_routes(query=None, limit=10, **location_params)
+
+        sql = _compiled_asyncpg_sql(session.calls[0][0])
+        assert "::VARCHAR IS NULL" in sql
+        assert "($2 IS NULL" not in sql
+        assert "($4 IS NULL" not in sql
 
 
 async def test_load_current_route_returns_none_when_not_found():
