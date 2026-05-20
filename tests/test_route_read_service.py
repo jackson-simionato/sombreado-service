@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from sqlalchemy.sql.elements import TextClause
 
 from app.services.routes import RouteReadService
 
@@ -21,8 +22,19 @@ class FakeSession:
         self.calls = []
 
     async def execute(self, statement, params):
-        self.calls.append((str(statement), params))
+        self.calls.append((statement, params))
         return self.result
+
+
+def _compiled_sql(statement) -> str:
+    from sqlalchemy.dialects.postgresql import dialect
+
+    return str(statement.compile(dialect=dialect()))
+
+
+def _assert_core_statement(statement) -> str:
+    assert not isinstance(statement, TextClause)
+    return _compiled_sql(statement)
 
 
 async def test_find_nearby_route_directions_maps_read_contract_rows():
@@ -49,8 +61,17 @@ async def test_find_nearby_route_directions_maps_read_contract_rows():
 
     assert candidates[0].route_direction_name == "Centro > Lagoa"
     assert candidates[0].departure_labels == ["Saida TICEN", "Saida Lagoa"]
-    assert "array_agg" in session.calls[0][0]
-    assert "ST_DWithin" in session.calls[0][0]
+    statement = session.calls[0][0]
+    sql = _assert_core_statement(statement)
+    assert "array_agg" in sql
+    assert "ST_DWithin" in sql
+    assert "ST_Distance" in sql
+    assert "route_segments" in sql
+    assert "route_versions" in sql
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "ORDER BY" in sql
+    assert "LIMIT" in sql
     assert session.calls[0][1]["radius_meters"] == 100
 
 
@@ -99,9 +120,13 @@ async def test_list_current_routes_maps_summaries_with_inline_directions():
     assert [direction.sequence for direction in routes[0].directions] == [1, 2]
     assert routes[0].directions[0].departure_labels == ["Saida TICEN"]
     statement, params = session.calls[0]
-    assert "r.is_current = true" in statement
-    assert "rv.is_current = true" in statement
-    assert "ST_DWithin" in statement
+    sql = _assert_core_statement(statement)
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "ST_DWithin" in sql
+    assert "ST_Distance" in sql
+    assert "array_agg" in sql
+    assert "ILIKE" in sql
     assert params["query_pattern"] == "%110%"
     assert params["limit"] == 10
 
@@ -122,6 +147,37 @@ async def test_list_current_routes_rejects_partial_location_filter():
     assert session.calls == []
 
 
+async def test_list_current_routes_without_location_skips_geospatial_filter():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_code="110",
+                    route_name="TICEN - Lagoa",
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    distance_meters=None,
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    route_direction_sequence=1,
+                    route_direction_name="Centro > Lagoa",
+                    departure_labels=[],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    routes = await service.list_current_routes(query=None, lat=None, lng=None, radius_meters=None, limit=10)
+
+    assert routes[0].distance_meters is None
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "ST_DWithin" not in sql
+    assert "ST_Distance" not in sql
+    assert params["query_pattern"] is None
+    assert params["limit"] == 10
+
+
 async def test_load_current_route_returns_none_when_not_found():
     session = FakeSession(FakeResult([]))
     service = RouteReadService(session)
@@ -129,7 +185,8 @@ async def test_load_current_route_returns_none_when_not_found():
     route = await service.load_current_route(UUID("00000000-0000-0000-0000-000000000001"))
 
     assert route is None
-    assert "r.id = :route_id" in session.calls[0][0]
+    sql = _assert_core_statement(session.calls[0][0])
+    assert "routes.id = %(route_id)s" in sql
 
 
 async def test_load_current_route_directions_maps_labels():
@@ -156,7 +213,8 @@ async def test_load_current_route_directions_maps_labels():
 
     assert directions[0].name == "Centro > Lagoa"
     assert directions[0].departure_labels == ["Saida TICEN"]
-    assert "r.id = :route_id" in session.calls[0][0]
+    sql = _assert_core_statement(session.calls[0][0])
+    assert "routes.id = %(route_id)s" in sql
 
 
 async def test_load_current_route_segments_maps_ordered_linestring_rows():
@@ -182,5 +240,7 @@ async def test_load_current_route_segments_maps_ordered_linestring_rows():
     )
 
     assert segments[0].coordinates == [(-48.5, -27.6), (-48.49, -27.6)]
-    assert "r.is_current = true" in session.calls[0][0]
-    assert "rv.is_current = true" in session.calls[0][0]
+    sql = _assert_core_statement(session.calls[0][0])
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "ST_AsText" in sql

@@ -1,9 +1,18 @@
 from uuid import UUID
 
-from sqlalchemy import text
+from geoalchemy2 import Geography
+from sqlalchemy import Float, Text, bindparam, cast, distinct, func, literal, or_, select, true
+from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by, array
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
+from app.models import (
+    RouteDirectionRecord,
+    RouteRecord,
+    RouteSegmentRecord,
+    RouteVersionRecord,
+    ServiceDirectionRecord,
+)
 from app.schemas import CandidateRouteDirection, LightweightRouteDirection, RouteSegment, RouteSummary
 from app.services.geometry import parse_linestring_wkt
 
@@ -30,54 +39,7 @@ class RouteReadService:
             limit,
         )
         rows = await self._session.execute(
-            text(
-                """
-                WITH user_point AS (
-                  SELECT ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography AS geog
-                ),
-                nearby_segments AS (
-                  SELECT
-                    rs.route_direction_id,
-                    MIN(ST_Distance(rs.geometry::geography, user_point.geog)) AS distance_meters
-                  FROM route_segments rs
-                  JOIN route_versions rv ON rv.id = rs.route_version_id
-                  JOIN routes r ON r.id = rv.route_id
-                  CROSS JOIN user_point
-                  WHERE r.is_current = true
-                    AND rv.is_current = true
-                    AND ST_DWithin(rs.geometry::geography, user_point.geog, :radius_meters)
-                  GROUP BY rs.route_direction_id
-                ),
-                candidate_labels AS (
-                  SELECT
-                    rd.id AS route_direction_id,
-                    COALESCE(
-                      array_remove(array_agg(DISTINCT sd.departure_label ORDER BY sd.departure_label), NULL),
-                      ARRAY[]::text[]
-                    ) AS departure_labels
-                  FROM route_directions rd
-                  LEFT JOIN service_directions sd ON sd.route_direction_id = rd.id
-                  GROUP BY rd.id
-                )
-                SELECT
-                  r.id AS route_id,
-                  r.code AS route_code,
-                  r.name AS route_name,
-                  rv.id AS route_version_id,
-                  rd.id AS route_direction_id,
-                  rd.sequence AS route_direction_sequence,
-                  rd.name AS route_direction_name,
-                  cl.departure_labels,
-                  ns.distance_meters
-                FROM nearby_segments ns
-                JOIN route_directions rd ON rd.id = ns.route_direction_id
-                JOIN route_versions rv ON rv.id = rd.route_version_id
-                JOIN routes r ON r.id = rv.route_id
-                JOIN candidate_labels cl ON cl.route_direction_id = rd.id
-                ORDER BY ns.distance_meters ASC, r.code ASC, rd.sequence ASC
-                LIMIT :limit
-                """
-            ),
+            _nearby_route_directions_statement(),
             {"lat": lat, "lng": lng, "radius_meters": radius_meters, "limit": limit},
         )
         return [CandidateRouteDirection.model_validate(row._mapping) for row in rows]
@@ -97,78 +59,12 @@ class RouteReadService:
             raise ValueError("lat, lng, and radius_meters must be provided together")
 
         rows = await self._session.execute(
-            text(
-                """
-                WITH matching_routes AS (
-                  SELECT
-                    r.id AS route_id,
-                    r.code AS route_code,
-                    r.name AS route_name,
-                    rv.id AS route_version_id,
-                    CASE
-                      WHEN :has_location THEN MIN(ST_Distance(rs.geometry::geography, user_point.geog))
-                      ELSE NULL
-                    END AS distance_meters
-                  FROM routes r
-                  JOIN route_versions rv ON rv.route_id = r.id
-                  JOIN route_directions rd ON rd.route_version_id = rv.id
-                  LEFT JOIN route_segments rs ON rs.route_direction_id = rd.id
-                  LEFT JOIN LATERAL (
-                    SELECT ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography AS geog
-                  ) user_point ON :has_location
-                  WHERE r.is_current = true
-                    AND rv.is_current = true
-                    AND (:query_pattern IS NULL OR r.code ILIKE :query_pattern OR r.name ILIKE :query_pattern)
-                    AND (
-                      NOT :has_location
-                      OR ST_DWithin(rs.geometry::geography, user_point.geog, :radius_meters)
-                    )
-                  GROUP BY r.id, r.code, r.name, rv.id
-                  ORDER BY
-                    CASE
-                      WHEN :has_location THEN MIN(ST_Distance(rs.geometry::geography, user_point.geog))
-                    END ASC NULLS LAST,
-                    r.code ASC,
-                    r.name ASC
-                  LIMIT :limit
-                ),
-                direction_labels AS (
-                  SELECT
-                    rd.id AS route_direction_id,
-                    COALESCE(
-                      array_remove(array_agg(DISTINCT sd.departure_label ORDER BY sd.departure_label), NULL),
-                      ARRAY[]::text[]
-                    ) AS departure_labels
-                  FROM route_directions rd
-                  LEFT JOIN service_directions sd ON sd.route_direction_id = rd.id
-                  GROUP BY rd.id
-                )
-                SELECT
-                  mr.route_id,
-                  mr.route_code,
-                  mr.route_name,
-                  mr.route_version_id,
-                  mr.distance_meters,
-                  rd.id AS route_direction_id,
-                  rd.sequence AS route_direction_sequence,
-                  rd.name AS route_direction_name,
-                  dl.departure_labels
-                FROM matching_routes mr
-                JOIN route_directions rd ON rd.route_version_id = mr.route_version_id
-                JOIN direction_labels dl ON dl.route_direction_id = rd.id
-                ORDER BY
-                  mr.distance_meters ASC NULLS LAST,
-                  mr.route_code ASC,
-                  mr.route_name ASC,
-                  rd.sequence ASC
-                """
-            ),
+            _list_current_routes_statement(has_location=has_location),
             {
                 "query_pattern": f"%{query}%" if query else None,
                 "lat": lat,
                 "lng": lng,
                 "radius_meters": radius_meters,
-                "has_location": has_location,
                 "limit": limit,
             },
         )
@@ -183,42 +79,7 @@ class RouteReadService:
         return route.directions if route else []
 
     async def _load_current_routes_by_id(self, *, route_id: UUID) -> list[RouteSummary]:
-        rows = await self._session.execute(
-            text(
-                """
-                WITH direction_labels AS (
-                  SELECT
-                    rd.id AS route_direction_id,
-                    COALESCE(
-                      array_remove(array_agg(DISTINCT sd.departure_label ORDER BY sd.departure_label), NULL),
-                      ARRAY[]::text[]
-                    ) AS departure_labels
-                  FROM route_directions rd
-                  LEFT JOIN service_directions sd ON sd.route_direction_id = rd.id
-                  GROUP BY rd.id
-                )
-                SELECT
-                  r.id AS route_id,
-                  r.code AS route_code,
-                  r.name AS route_name,
-                  rv.id AS route_version_id,
-                  NULL::double precision AS distance_meters,
-                  rd.id AS route_direction_id,
-                  rd.sequence AS route_direction_sequence,
-                  rd.name AS route_direction_name,
-                  dl.departure_labels
-                FROM routes r
-                JOIN route_versions rv ON rv.route_id = r.id
-                JOIN route_directions rd ON rd.route_version_id = rv.id
-                JOIN direction_labels dl ON dl.route_direction_id = rd.id
-                WHERE r.is_current = true
-                  AND rv.is_current = true
-                  AND r.id = :route_id
-                ORDER BY rd.sequence ASC
-                """
-            ),
-            {"route_id": route_id},
-        )
+        rows = await self._session.execute(_load_current_route_statement(), {"route_id": route_id})
         return _route_summaries_from_rows(rows)
 
     async def load_current_route_segments(
@@ -228,26 +89,7 @@ class RouteReadService:
         route_direction_id: UUID,
     ) -> list[RouteSegment]:
         rows = await self._session.execute(
-            text(
-                """
-                SELECT
-                  rs.id,
-                  rs.sequence,
-                  ST_AsText(rs.geometry) AS geometry_wkt,
-                  rs.bearing_degrees,
-                  rs.distance_meters,
-                  rs.cumulative_distance_meters
-                FROM route_segments rs
-                JOIN route_directions rd ON rd.id = rs.route_direction_id
-                JOIN route_versions rv ON rv.id = rd.route_version_id
-                JOIN routes r ON r.id = rv.route_id
-                WHERE r.is_current = true
-                  AND rv.is_current = true
-                  AND rv.id = :route_version_id
-                  AND rd.id = :route_direction_id
-                ORDER BY rs.sequence ASC
-                """
-            ),
+            _load_current_route_segments_statement(),
             {"route_version_id": route_version_id, "route_direction_id": route_direction_id},
         )
         return [
@@ -261,6 +103,214 @@ class RouteReadService:
             )
             for row in rows
         ]
+
+
+def _geography(geometry):
+    return cast(geometry, Geography)
+
+
+def _user_point_cte():
+    return select(
+        cast(func.ST_SetSRID(func.ST_MakePoint(bindparam("lng"), bindparam("lat")), 4326), Geography).label("geog")
+    ).cte("user_point")
+
+
+def _departure_labels_expression():
+    labels = func.array_remove(
+        func.array_agg(
+            aggregate_order_by(
+                distinct(ServiceDirectionRecord.departure_label),
+                ServiceDirectionRecord.departure_label,
+            )
+        ),
+        None,
+    )
+    return func.coalesce(labels, cast(array([], type_=Text()), ARRAY(Text()))).label("departure_labels")
+
+
+def _direction_labels_cte(name: str = "direction_labels"):
+    return (
+        select(
+            RouteDirectionRecord.id.label("route_direction_id"),
+            _departure_labels_expression(),
+        )
+        .select_from(RouteDirectionRecord)
+        .outerjoin(ServiceDirectionRecord, ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id)
+        .group_by(RouteDirectionRecord.id)
+        .cte(name)
+    )
+
+
+def _nearby_route_directions_statement():
+    user_point = _user_point_cte()
+    distance = func.min(func.ST_Distance(_geography(RouteSegmentRecord.geometry), user_point.c.geog)).label(
+        "distance_meters"
+    )
+    nearby_segments = (
+        select(RouteSegmentRecord.route_direction_id.label("route_direction_id"), distance)
+        .select_from(RouteSegmentRecord)
+        .join(RouteVersionRecord, RouteVersionRecord.id == RouteSegmentRecord.route_version_id)
+        .join(RouteRecord, RouteRecord.id == RouteVersionRecord.route_id)
+        .join(user_point, true())
+        .where(
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+            func.ST_DWithin(
+                _geography(RouteSegmentRecord.geometry),
+                user_point.c.geog,
+                bindparam("radius_meters"),
+            ),
+        )
+        .group_by(RouteSegmentRecord.route_direction_id)
+        .cte("nearby_segments")
+    )
+    candidate_labels = _direction_labels_cte("candidate_labels")
+
+    return (
+        select(
+            RouteRecord.id.label("route_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+            RouteVersionRecord.id.label("route_version_id"),
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteDirectionRecord.sequence.label("route_direction_sequence"),
+            RouteDirectionRecord.name.label("route_direction_name"),
+            candidate_labels.c.departure_labels,
+            nearby_segments.c.distance_meters,
+        )
+        .select_from(nearby_segments)
+        .join(RouteDirectionRecord, RouteDirectionRecord.id == nearby_segments.c.route_direction_id)
+        .join(RouteVersionRecord, RouteVersionRecord.id == RouteDirectionRecord.route_version_id)
+        .join(RouteRecord, RouteRecord.id == RouteVersionRecord.route_id)
+        .join(candidate_labels, candidate_labels.c.route_direction_id == RouteDirectionRecord.id)
+        .order_by(nearby_segments.c.distance_meters.asc(), RouteRecord.code.asc(), RouteDirectionRecord.sequence.asc())
+        .limit(bindparam("limit"))
+    )
+
+
+def _list_current_routes_statement(*, has_location: bool):
+    user_point = _user_point_cte() if has_location else None
+    distance = (
+        func.min(func.ST_Distance(_geography(RouteSegmentRecord.geometry), user_point.c.geog)).label("distance_meters")
+        if user_point is not None
+        else cast(literal(None), Float).label("distance_meters")
+    )
+
+    matching_routes = (
+        select(
+            RouteRecord.id.label("route_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+            RouteVersionRecord.id.label("route_version_id"),
+            distance,
+        )
+        .select_from(RouteRecord)
+        .join(RouteVersionRecord, RouteVersionRecord.route_id == RouteRecord.id)
+        .join(RouteDirectionRecord, RouteDirectionRecord.route_version_id == RouteVersionRecord.id)
+        .where(
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+            or_(
+                bindparam("query_pattern").is_(None),
+                RouteRecord.code.ilike(bindparam("query_pattern")),
+                RouteRecord.name.ilike(bindparam("query_pattern")),
+            ),
+        )
+    )
+    if user_point is not None:
+        matching_routes = matching_routes.join(
+            RouteSegmentRecord,
+            RouteSegmentRecord.route_direction_id == RouteDirectionRecord.id,
+        ).join(user_point, true())
+        matching_routes = matching_routes.where(
+            func.ST_DWithin(
+                _geography(RouteSegmentRecord.geometry),
+                user_point.c.geog,
+                bindparam("radius_meters"),
+            )
+        )
+
+    matching_routes = (
+        matching_routes.group_by(RouteRecord.id, RouteRecord.code, RouteRecord.name, RouteVersionRecord.id)
+        .order_by(distance.asc().nulls_last(), RouteRecord.code.asc(), RouteRecord.name.asc())
+        .limit(bindparam("limit"))
+        .cte("matching_routes")
+    )
+    direction_labels = _direction_labels_cte()
+
+    return (
+        select(
+            matching_routes.c.route_id,
+            matching_routes.c.route_code,
+            matching_routes.c.route_name,
+            matching_routes.c.route_version_id,
+            matching_routes.c.distance_meters,
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteDirectionRecord.sequence.label("route_direction_sequence"),
+            RouteDirectionRecord.name.label("route_direction_name"),
+            direction_labels.c.departure_labels,
+        )
+        .select_from(matching_routes)
+        .join(RouteDirectionRecord, RouteDirectionRecord.route_version_id == matching_routes.c.route_version_id)
+        .join(direction_labels, direction_labels.c.route_direction_id == RouteDirectionRecord.id)
+        .order_by(
+            matching_routes.c.distance_meters.asc().nulls_last(),
+            matching_routes.c.route_code.asc(),
+            matching_routes.c.route_name.asc(),
+            RouteDirectionRecord.sequence.asc(),
+        )
+    )
+
+
+def _load_current_route_statement():
+    direction_labels = _direction_labels_cte()
+    return (
+        select(
+            RouteRecord.id.label("route_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+            RouteVersionRecord.id.label("route_version_id"),
+            cast(literal(None), Float).label("distance_meters"),
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteDirectionRecord.sequence.label("route_direction_sequence"),
+            RouteDirectionRecord.name.label("route_direction_name"),
+            direction_labels.c.departure_labels,
+        )
+        .select_from(RouteRecord)
+        .join(RouteVersionRecord, RouteVersionRecord.route_id == RouteRecord.id)
+        .join(RouteDirectionRecord, RouteDirectionRecord.route_version_id == RouteVersionRecord.id)
+        .join(direction_labels, direction_labels.c.route_direction_id == RouteDirectionRecord.id)
+        .where(
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+            RouteRecord.id == bindparam("route_id"),
+        )
+        .order_by(RouteDirectionRecord.sequence.asc())
+    )
+
+
+def _load_current_route_segments_statement():
+    return (
+        select(
+            RouteSegmentRecord.id,
+            RouteSegmentRecord.sequence,
+            func.ST_AsText(RouteSegmentRecord.geometry).label("geometry_wkt"),
+            RouteSegmentRecord.bearing_degrees,
+            RouteSegmentRecord.distance_meters,
+            RouteSegmentRecord.cumulative_distance_meters,
+        )
+        .select_from(RouteSegmentRecord)
+        .join(RouteDirectionRecord, RouteDirectionRecord.id == RouteSegmentRecord.route_direction_id)
+        .join(RouteVersionRecord, RouteVersionRecord.id == RouteDirectionRecord.route_version_id)
+        .join(RouteRecord, RouteRecord.id == RouteVersionRecord.route_id)
+        .where(
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+            RouteVersionRecord.id == bindparam("route_version_id"),
+            RouteDirectionRecord.id == bindparam("route_direction_id"),
+        )
+        .order_by(RouteSegmentRecord.sequence.asc())
+    )
 
 
 def _route_summaries_from_rows(rows) -> list[RouteSummary]:
