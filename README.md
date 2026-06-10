@@ -52,6 +52,13 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
 ## Public Endpoints
 
 - `GET /health/live`
+- `GET /v1/route-candidates/search`
+  - Searches current route candidates by route code or route name for the browser manual route path.
+  - Query parameters:
+    - `query`: required route code/name search text, 1 to 100 characters.
+    - `limit`: optional route candidate limit, defaults to `8`, max `100`.
+  - Returns `{ "routes": [...] }` with camelCase Route Candidate fields: `routeId`, `routeVersionId`, `routeCode`, `routeName`, and `directionHints`.
+  - Route candidates do not include selectable direction identifiers.
 - `GET /v1/routes`
   - Lists current route summaries.
   - Query parameters:

@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from app.main import create_app
 from app.routes.advisory import get_advisory_service
 from app.routes.nearby import get_route_service
+from app.routes.route_candidates import get_route_service as get_route_candidate_service
 from app.schemas import (
     CandidateRouteDirection,
     ExposureDirection,
@@ -13,6 +14,7 @@ from app.schemas import (
     LightweightRouteDirection,
     OnboardAdvisoryResponse,
     ProjectedRoutePosition,
+    RouteCandidate,
     RouteSegment,
     RouteSummary,
 )
@@ -93,6 +95,18 @@ class FakeRouteService:
                 route_direction_name="Centro > Lagoa",
                 departure_labels=["Saida TICEN", "Saida Lagoa"],
                 distance_meters=18.5,
+            )
+        ]
+
+    async def search_route_candidates(self, *, query, limit):
+        self.last_search_route_candidates_request = {"query": query, "limit": limit}
+        return [
+            RouteCandidate(
+                route_id="00000000-0000-0000-0000-000000000010",
+                route_version_id="00000000-0000-0000-0000-000000000020",
+                route_code="330",
+                route_name="TILAG - Centro",
+                direction_hints=["TILAG", "Centro"],
             )
         ]
 
@@ -208,6 +222,84 @@ async def test_nearby_route_directions_endpoint_uses_route_service():
     assert candidate["route_direction_name"] == "Centro > Lagoa"
     assert candidate["departure_labels"] == ["Saida TICEN", "Saida Lagoa"]
     assert "candidate_direction_label" not in candidate
+
+
+@pytest.mark.asyncio
+async def test_manual_route_candidate_search_uses_default_limit_and_camel_case_response():
+    app = create_app()
+    fake_service = FakeRouteService()
+
+    async def override_route_service():
+        return fake_service
+
+    app.dependency_overrides[get_route_candidate_service] = override_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/route-candidates/search", params={"query": "330"})
+
+    assert response.status_code == 200
+    assert fake_service.last_search_route_candidates_request == {"query": "330", "limit": 8}
+
+    body = response.json()
+    assert body == {
+        "routes": [
+            {
+                "routeId": "00000000-0000-0000-0000-000000000010",
+                "routeVersionId": "00000000-0000-0000-0000-000000000020",
+                "routeCode": "330",
+                "routeName": "TILAG - Centro",
+                "directionHints": ["TILAG", "Centro"],
+            }
+        ]
+    }
+    candidate = body["routes"][0]
+    assert "routeDirectionId" not in candidate
+    assert "route_direction_id" not in candidate
+    assert "directions" not in candidate
+    assert "distanceMeters" not in candidate
+
+
+@pytest.mark.asyncio
+async def test_manual_route_candidate_search_accepts_explicit_limit():
+    app = create_app()
+    fake_service = FakeRouteService()
+
+    async def override_route_service():
+        return fake_service
+
+    app.dependency_overrides[get_route_candidate_service] = override_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/route-candidates/search", params={"query": "330", "limit": 3})
+
+    assert response.status_code == 200
+    assert fake_service.last_search_route_candidates_request == {"query": "330", "limit": 3}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "expected_status"),
+    [
+        ({"query": ""}, 422),
+        ({"query": "330", "limit": 0}, 422),
+        ({"query": "330", "limit": 101}, 422),
+    ],
+)
+async def test_manual_route_candidate_search_validation_errors_use_standard_envelope(params, expected_status):
+    app = create_app()
+    app.dependency_overrides[get_route_candidate_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/route-candidates/search", params=params)
+
+    assert response.status_code == expected_status
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()
 
 
 @pytest.mark.asyncio
