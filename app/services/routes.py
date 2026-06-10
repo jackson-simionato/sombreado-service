@@ -13,7 +13,7 @@ from app.models import (
     RouteVersionRecord,
     ServiceDirectionRecord,
 )
-from app.schemas import CandidateRouteDirection, LightweightRouteDirection, RouteSegment, RouteSummary
+from app.schemas import CandidateRouteDirection, LightweightRouteDirection, RouteCandidate, RouteSegment, RouteSummary
 from app.services.geometry import parse_linestring_wkt
 
 logger = get_logger(__name__)
@@ -43,6 +43,14 @@ class RouteReadService:
             {"lat": lat, "lng": lng, "radius_meters": radius_meters, "limit": limit},
         )
         return [CandidateRouteDirection.model_validate(row._mapping) for row in rows]
+
+    async def search_route_candidates(self, *, query: str, limit: int) -> list[RouteCandidate]:
+        logger.info("Searching route candidates query=%s limit=%s", query, limit)
+        rows = await self._session.execute(
+            _search_route_candidates_statement(),
+            {"query_pattern": f"%{query}%", "limit": limit},
+        )
+        return _route_candidates_from_rows(rows)
 
     async def list_current_routes(
         self,
@@ -138,6 +146,48 @@ def _direction_labels_cte(name: str = "direction_labels"):
         .outerjoin(ServiceDirectionRecord, ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id)
         .group_by(RouteDirectionRecord.id)
         .cte(name)
+    )
+
+
+def _route_candidate_hints_expression():
+    labels = func.array_remove(
+        func.array_agg(
+            aggregate_order_by(
+                ServiceDirectionRecord.departure_label,
+                RouteDirectionRecord.sequence.asc(),
+                ServiceDirectionRecord.departure_label.asc(),
+            )
+        ),
+        None,
+    )
+    return func.coalesce(labels, cast(array([], type_=Text()), ARRAY(Text()))).label("direction_hints")
+
+
+def _search_route_candidates_statement():
+    query_pattern = bindparam("query_pattern", type_=Text())
+    return (
+        select(
+            RouteRecord.id.label("route_id"),
+            RouteVersionRecord.id.label("route_version_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+            _route_candidate_hints_expression(),
+        )
+        .select_from(RouteRecord)
+        .join(RouteVersionRecord, RouteVersionRecord.route_id == RouteRecord.id)
+        .outerjoin(RouteDirectionRecord, RouteDirectionRecord.route_version_id == RouteVersionRecord.id)
+        .outerjoin(ServiceDirectionRecord, ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id)
+        .where(
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+            or_(
+                RouteRecord.code.ilike(query_pattern),
+                RouteRecord.name.ilike(query_pattern),
+            ),
+        )
+        .group_by(RouteRecord.id, RouteVersionRecord.id, RouteRecord.code, RouteRecord.name)
+        .order_by(RouteRecord.code.asc(), RouteRecord.name.asc())
+        .limit(bindparam("limit"))
     )
 
 
@@ -339,3 +389,30 @@ def _route_summaries_from_rows(rows) -> list[RouteSummary]:
             )
         )
     return list(summaries.values())
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _route_candidates_from_rows(rows) -> list[RouteCandidate]:
+    candidates: list[RouteCandidate] = []
+    for row in rows:
+        values = row._mapping
+        candidates.append(
+            RouteCandidate(
+                route_id=values["route_id"],
+                route_version_id=values["route_version_id"],
+                route_code=values["route_code"],
+                route_name=values["route_name"],
+                direction_hints=_dedupe_preserving_order(values["direction_hints"] or []),
+            )
+        )
+    return candidates

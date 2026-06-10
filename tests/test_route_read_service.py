@@ -200,6 +200,69 @@ async def test_list_current_routes_without_query_types_null_search_parameter_for
         assert "($4 IS NULL" not in sql
 
 
+async def test_search_route_candidates_maps_route_only_candidates_without_location_filter():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    route_code="330",
+                    route_name="TILAG - Centro",
+                    direction_hints=["TILAG", "Centro", "Centro"],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    candidates = await service.search_route_candidates(query="330", limit=8)
+
+    assert len(candidates) == 1
+    assert candidates[0].route_id == UUID("00000000-0000-0000-0000-000000000001")
+    assert candidates[0].route_version_id == UUID("00000000-0000-0000-0000-000000000002")
+    assert candidates[0].route_code == "330"
+    assert candidates[0].route_name == "TILAG - Centro"
+    assert candidates[0].direction_hints == ["TILAG", "Centro"]
+    assert "distance_meters" not in candidates[0].model_dump()
+
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "ILIKE" in sql
+    assert "GROUP BY" in sql
+    assert "LEFT OUTER JOIN route_directions" in sql
+    assert "LEFT OUTER JOIN service_directions" in sql
+    assert "ST_DWithin" not in sql
+    assert "ST_Distance" not in sql
+    assert params["query_pattern"] == "%330%"
+    assert params["limit"] == 8
+
+
+async def test_search_route_candidates_allows_current_routes_without_direction_hints():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000011"),
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000012"),
+                    route_code="999",
+                    route_name="Circular Sem Rotulo",
+                    direction_hints=[],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    candidates = await service.search_route_candidates(query="Circular", limit=8)
+
+    assert len(candidates) == 1
+    assert candidates[0].route_code == "999"
+    assert candidates[0].direction_hints == []
+
+
 async def test_load_current_route_returns_none_when_not_found():
     session = FakeSession(FakeResult([]))
     service = RouteReadService(session)

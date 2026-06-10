@@ -3,7 +3,8 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.alias_generators import to_camel
 
 
 class ExposureDirection(StrEnum):
@@ -18,6 +19,22 @@ class ExposureDirection(StrEnum):
 class SunPosition(BaseModel):
     azimuth: float = Field(ge=0, le=360)
     elevation: float
+
+
+class BrowserSchema(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+class RouteCandidate(BrowserSchema):
+    route_id: UUID
+    route_version_id: UUID
+    route_code: str
+    route_name: str
+    direction_hints: list[str] = Field(default_factory=list)
+
+
+class RouteCandidatesResponse(BrowserSchema):
+    routes: list[RouteCandidate]
 
 
 class LightweightRouteDirection(BaseModel):
