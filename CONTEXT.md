@@ -33,40 +33,56 @@ Passenger-usable route data from the scraper's current route and route version r
 _Avoid_: Historical route data, archived route versions
 
 **Route Discovery**:
-The passenger-facing API surface for finding current routes, directions, and route geometry before requesting an advisory.
+The passenger-facing API surface for finding current route candidates, selecting a direction, and loading route geometry before requesting advice.
 _Avoid_: Route administration, scraper inspection
 
 **Route Search**:
 Text filtering over current route codes and names for route catalogue browsing.
 _Avoid_: Nearby direction lookup, full-text indexing
 
-**Route Listing Limit**:
-The maximum number of current route summaries or nearby direction candidates returned by a route discovery request, defaulting to 10.
+**Route Candidate Limit**:
+The maximum number of route candidates returned by a route discovery request, with separate defaults for nearby discovery and route search.
 _Avoid_: Offset pagination, cursor pagination
 
 **Nearby Route Filter**:
 Geospatial filtering that finds current routes near a passenger location.
 _Avoid_: Advisory projection, selected direction
 
-**Route Summary**:
-A current route listing item with route identity, its current version identifier, lightweight directions, and optional distance from a passenger location.
-_Avoid_: Full route geometry, historical route version
+**Route Candidate**:
+A current route option shown before a passenger chooses a direction, with route identity, current version identity, optional distance, and zero or more direction hints.
+_Avoid_: Route summary, route detail, selectable direction
 
-**Route Detail**:
-A stable lookup of one current route using the same passenger-facing data as a route summary.
-_Avoid_: Geometry endpoint, historical route lookup
+**Direction Hint**:
+A non-selectable departure label shown on a route candidate to help a passenger recognize boarding or destination context before choosing a direction.
+_Avoid_: Direction choice, direction identifier, route direction name
 
-**Lightweight Direction**:
-A selectable current route direction described by its identifier, sequence, scraper name, and passenger-facing departure labels.
+**Direction Choice**:
+A selectable current route direction for a selected route candidate.
 _Avoid_: Segment geometry, service timetable
 
 **Departure Label**:
-A passenger-facing label from scraper service direction data that helps distinguish how a route direction is boarded or announced.
+A passenger-facing label from scraper service direction data that helps distinguish how a route direction is boarded, announced, or recognized.
 _Avoid_: Public service direction resource, timetable
 
+**Direction Match Confidence**:
+The scraper's confidence that a service direction belongs to a route direction.
+_Avoid_: Rider-facing route quality, schedule confidence
+
 **Route Geometry**:
-The ordered segment coordinates and distance metadata for one current route direction.
-_Avoid_: Route summary, stop list
+The passenger-facing ordered polyline for one current direction choice.
+_Avoid_: Route candidate, stop list
+
+**Advice**:
+A passenger-facing sun-side result for a selected current direction.
+_Avoid_: Onboard advisory, route discovery result
+
+**Advice Horizon**:
+The route window used to compute advice, either the upcoming portion near the passenger or the remaining route.
+_Avoid_: Include remaining flag, response section
+
+**Sun Condition**:
+A coarse daylight context attached to advice, such as night, low sun, daylight, or overhead sun.
+_Avoid_: Raw solar elevation, azimuth debug value
 
 ## Relationships
 
@@ -74,18 +90,23 @@ _Avoid_: Route summary, stop list
 - A **Reader Database Role** must not mutate scraper-owned route data.
 - **Route Discovery** exposes only **Current Route Data**.
 - **Route Discovery** supports **Route Search** and a **Nearby Route Filter**.
-- **Route Search** sorts route summaries by route code and then route name.
-- A **Nearby Route Filter** sorts route summaries by distance and then route code.
-- A **Route Listing Limit** bounds route discovery responses without offset or cursor pagination.
-- A **Route Listing Limit** defaults to 10 when the client does not request a limit.
-- A **Route Summary** includes one or more **Lightweight Directions**.
-- A **Route Detail** has the same passenger-facing fields as a **Route Summary**.
-- **Lightweight Directions** are discovered through their route, not through a standalone direction detail resource.
-- A **Lightweight Direction** may have zero, one, or many **Departure Labels**.
-- Nearby route direction candidates return all **Departure Labels** for the direction.
-- **Route Geometry** belongs to exactly one current route direction.
-- A **Route Summary** does not include **Route Geometry**.
-- A **Nearby Route Filter** finds routes, while nearby route direction lookup finds selectable directions for advisories.
+- **Route Search** returns **Route Candidates** by route code and route name.
+- A **Nearby Route Filter** sorts **Route Candidates** by passenger relevance.
+- A **Route Candidate Limit** bounds route discovery responses without offset or cursor pagination.
+- Nearby discovery and route search use different **Route Candidate Limit** defaults.
+- A **Route Candidate** may include zero or more **Direction Hints**.
+- A **Route Candidate** does not include selectable direction identifiers.
+- A **Route Search** may return a **Route Candidate** with no **Direction Hints**.
+- A **Nearby Route Filter** returns only **Route Candidates** close enough to the passenger to have meaningful distance.
+- **Direction Choices** are discovered after a passenger selects a **Route Candidate**.
+- A **Direction Choice** may have zero, one, or many **Departure Labels**.
+- Public **Departure Labels** use high or medium **Direction Match Confidence**.
+- **Departure Labels** do not determine whether a **Direction Choice** is usable.
+- **Route Geometry** belongs to exactly one current **Direction Choice**.
+- A **Route Candidate** does not include **Route Geometry**.
+- **Advice** is requested after a passenger selects a **Direction Choice**.
+- An **Advice Horizon** selects one computation window for an **Advice** result.
+- A **Sun Condition** describes the selected **Advice Horizon**, not individual route segments.
 - A **Render Deployment** runs the **Sombreado Service** and is triggered by GitHub Actions after CI passes on `main`.
 - A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it.
 - A **Runtime Secret** belongs in Render when the running service needs it.
@@ -99,28 +120,28 @@ _Avoid_: Route summary, stop list
 > **Domain expert:** "No — passengers only need **Current Route Data**; version IDs may appear only so advisory requests can refer to the selected current route direction."
 >
 > **Dev:** "Is a nearby route filter the same as choosing a route direction for an advisory?"
-> **Domain expert:** "No — a **Nearby Route Filter** narrows the route catalogue, while nearby route direction lookup returns selectable directions."
+> **Domain expert:** "No — a **Nearby Route Filter** narrows the route catalogue to **Route Candidates**, while **Direction Choices** are loaded after route selection."
 >
 > **Dev:** "Should a route listing force the app to call another endpoint before a passenger can choose a direction?"
-> **Domain expert:** "No — a **Route Summary** includes **Lightweight Directions** so the route can be selected directly."
+> **Domain expert:** "Yes — a **Route Candidate** is route-only, and **Direction Choices** are selected through the next route discovery step."
 >
 > **Dev:** "Should **Route Search** return all coordinates for every matching route?"
 > **Domain expert:** "No — clients request **Route Geometry** only after choosing a current route direction."
 >
 > **Dev:** "Should clients browse service directions directly?"
-> **Domain expert:** "No — **Departure Labels** appear on **Lightweight Directions**; service directions are scraper-owned supporting data."
+> **Domain expert:** "No — **Departure Labels** appear as **Direction Hints** on route candidates and as labels on **Direction Choices**; service directions are scraper-owned supporting data."
 >
 > **Dev:** "Should opening a saved route load geometry immediately?"
-> **Domain expert:** "No — **Route Detail** restores the selected current route and directions; **Route Geometry** is requested separately."
+> **Domain expert:** "No — clients should restore through current **Route Candidates** and **Direction Choices**; **Route Geometry** is requested separately."
 >
 > **Dev:** "Do route listings need offset pagination?"
-> **Domain expert:** "No — use a **Route Listing Limit**; current route discovery is small enough to avoid cursor or offset pagination for now."
+> **Domain expert:** "No — use a **Route Candidate Limit**; current route discovery is small enough to avoid cursor or offset pagination for now."
 >
 > **Dev:** "Should the API expose a standalone direction detail endpoint?"
-> **Domain expert:** "No — passengers discover **Lightweight Directions** through routes, then use the direction ID for advisories or **Route Geometry**."
+> **Domain expert:** "No — passengers discover **Direction Choices** through a selected route, then use the direction ID for **Advice** or **Route Geometry**."
 >
 > **Dev:** "If a nearby route direction has multiple service labels, should we pick one?"
-> **Domain expert:** "No — return all **Departure Labels** and use the default **Route Listing Limit** of 10 when no limit is provided."
+> **Domain expert:** "No — use **Departure Labels** as **Direction Hints** for route recognition, then return **Departure Labels** again on selectable **Direction Choices**."
 
 ## Flagged ambiguities
 
@@ -129,9 +150,10 @@ _Avoid_: Route summary, stop list
 - `DATABASE_URL` is a **Runtime Secret**, not a **Pipeline Secret**.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.
-- "pagination" means **Route Listing Limit** only, defaulting to 10, not offset or cursor pagination.
-- "directions inline" means **Lightweight Directions**, not route segment geometry or timetables.
-- "direction detail" means **Lightweight Directions** under a route, not a standalone route-direction resource.
-- "geometry" means **Route Geometry** for one current route direction, not an inline field on every **Route Summary**.
+- "pagination" means **Route Candidate Limit** only, not offset or cursor pagination.
+- "directions inline" means **Direction Hints**, not selectable directions, route segment geometry, or timetables.
+- "direction detail" means **Direction Choices** under a route, not a standalone route-direction resource.
+- "geometry" means **Route Geometry** for one current direction choice, not an inline field on every **Route Candidate**.
 - "service directions" means **Departure Labels** attached to directions, not a standalone public resource.
-- "route detail" means a current **Route Detail**, not archived versions or full geometry.
+- "route detail" is retired public language; use **Route Candidate** before direction selection and **Direction Choice** after route selection.
+- "horizon" means the selected **Advice Horizon**, not a request to return multiple windows in one advice response.
