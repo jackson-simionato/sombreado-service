@@ -4,6 +4,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy.sql.elements import TextClause
 
+from app.models import ServiceDirectionRecord
 from app.services.routes import RouteReadService
 
 
@@ -41,6 +42,14 @@ def _compiled_asyncpg_sql(statement) -> str:
 def _assert_core_statement(statement) -> str:
     assert not isinstance(statement, TextClause)
     return _compiled_sql(statement)
+
+
+def test_service_direction_record_maps_public_label_columns():
+    sequence_column = ServiceDirectionRecord.sequence.property.columns[0]
+    confidence_column = ServiceDirectionRecord.confidence.property.columns[0]
+
+    assert sequence_column.name == "sequence"
+    assert confidence_column.name == "confidence"
 
 
 async def test_find_nearby_route_directions_maps_read_contract_rows():
@@ -240,6 +249,34 @@ async def test_search_route_candidates_maps_route_only_candidates_without_locati
     assert params["limit"] == 8
 
 
+async def test_search_route_candidates_filters_orders_and_dedupes_public_departure_label_hints():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    route_code="330",
+                    route_name="TILAG - Centro",
+                    direction_hints=["TICEN", "Centro", "TICEN", "TICEN Leste"],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    candidates = await service.search_route_candidates(query="330", limit=8)
+
+    assert candidates[0].direction_hints == ["TICEN", "Centro", "TICEN Leste"]
+
+    statement, _params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "service_directions.confidence IN" in sql
+    assert "service_directions.route_direction_id IS NOT NULL" in sql
+    assert "route_directions.sequence ASC" in sql
+    assert "service_directions.sequence ASC" in sql
+
+
 async def test_search_route_candidates_allows_current_routes_without_direction_hints():
     session = FakeSession(
         FakeResult(
@@ -300,6 +337,63 @@ async def test_load_current_route_directions_maps_labels():
     assert directions[0].departure_labels == ["Saida TICEN"]
     sql = _assert_core_statement(session.calls[0][0])
     assert "routes.id = %(route_id)s" in sql
+
+
+async def test_load_current_route_directions_uses_public_departure_label_semantics():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_code="110",
+                    route_name="TICEN - Lagoa",
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    distance_meters=None,
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    route_direction_sequence=1,
+                    route_direction_name="Centro > Lagoa",
+                    departure_labels=["TICEN", "Centro", "TICEN"],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_current_route_directions(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert directions[0].departure_labels == ["TICEN", "Centro"]
+
+    statement, _params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "service_directions.confidence IN" in sql
+    assert "service_directions.route_direction_id IS NOT NULL" in sql
+    assert "service_directions.sequence ASC" in sql
+
+
+async def test_load_current_route_directions_keeps_direction_when_public_labels_are_empty():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_code="110",
+                    route_name="TICEN - Lagoa",
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    distance_meters=None,
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    route_direction_sequence=1,
+                    route_direction_name="Centro > Lagoa",
+                    departure_labels=[],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_current_route_directions(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert len(directions) == 1
+    assert directions[0].departure_labels == []
 
 
 async def test_load_current_route_segments_maps_ordered_linestring_rows():

@@ -58,6 +58,8 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
     - `query`: required route code/name search text, 1 to 100 characters.
     - `limit`: optional route candidate limit, defaults to `8`, max `100`.
   - Returns `{ "routes": [...] }` with camelCase Route Candidate fields: `routeId`, `routeVersionId`, `routeCode`, `routeName`, and `directionHints`.
+  - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
+  - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
   - Route candidates do not include selectable direction identifiers.
 - `GET /v1/routes`
   - Lists current route summaries.

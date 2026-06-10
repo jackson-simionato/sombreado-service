@@ -54,4 +54,6 @@ class ServiceDirectionRecord(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     route_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("route_versions.id"))
     route_direction_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("route_directions.id"))
+    sequence: Mapped[int] = mapped_column(Integer)
     departure_label: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(16))

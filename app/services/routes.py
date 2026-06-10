@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from geoalchemy2 import Geography
-from sqlalchemy import Float, Text, bindparam, cast, distinct, func, literal, or_, select, true
+from sqlalchemy import Float, Text, and_, bindparam, cast, func, literal, or_, select, true
 from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by, array
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from app.schemas import CandidateRouteDirection, LightweightRouteDirection, Rout
 from app.services.geometry import parse_linestring_wkt
 
 logger = get_logger(__name__)
+PUBLIC_DIRECTION_LABEL_CONFIDENCES = ("high", "medium")
 
 
 class RouteReadService:
@@ -117,6 +118,14 @@ def _geography(geometry):
     return cast(geometry, Geography)
 
 
+def _public_service_direction_join_condition():
+    return and_(
+        ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id,
+        ServiceDirectionRecord.route_direction_id.is_not(None),
+        ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
+    )
+
+
 def _user_point_cte():
     return select(
         cast(func.ST_SetSRID(func.ST_MakePoint(bindparam("lng"), bindparam("lat")), 4326), Geography).label("geog")
@@ -127,8 +136,8 @@ def _departure_labels_expression():
     labels = func.array_remove(
         func.array_agg(
             aggregate_order_by(
-                distinct(ServiceDirectionRecord.departure_label),
                 ServiceDirectionRecord.departure_label,
+                ServiceDirectionRecord.sequence.asc(),
             )
         ),
         None,
@@ -143,7 +152,7 @@ def _direction_labels_cte(name: str = "direction_labels"):
             _departure_labels_expression(),
         )
         .select_from(RouteDirectionRecord)
-        .outerjoin(ServiceDirectionRecord, ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id)
+        .outerjoin(ServiceDirectionRecord, _public_service_direction_join_condition())
         .group_by(RouteDirectionRecord.id)
         .cte(name)
     )
@@ -155,7 +164,7 @@ def _route_candidate_hints_expression():
             aggregate_order_by(
                 ServiceDirectionRecord.departure_label,
                 RouteDirectionRecord.sequence.asc(),
-                ServiceDirectionRecord.departure_label.asc(),
+                ServiceDirectionRecord.sequence.asc(),
             )
         ),
         None,
@@ -176,7 +185,7 @@ def _search_route_candidates_statement():
         .select_from(RouteRecord)
         .join(RouteVersionRecord, RouteVersionRecord.route_id == RouteRecord.id)
         .outerjoin(RouteDirectionRecord, RouteDirectionRecord.route_version_id == RouteVersionRecord.id)
-        .outerjoin(ServiceDirectionRecord, ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id)
+        .outerjoin(ServiceDirectionRecord, _public_service_direction_join_condition())
         .where(
             RouteRecord.is_current == true(),
             RouteVersionRecord.is_current == true(),
@@ -385,7 +394,7 @@ def _route_summaries_from_rows(rows) -> list[RouteSummary]:
                 route_direction_id=values["route_direction_id"],
                 sequence=values["route_direction_sequence"],
                 name=values["route_direction_name"],
-                departure_labels=values["departure_labels"],
+                departure_labels=_dedupe_preserving_order(values["departure_labels"] or []),
             )
         )
     return list(summaries.values())
