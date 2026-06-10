@@ -10,6 +10,7 @@ def test_settings_defaults_use_read_only_advisory_values():
     assert str(settings.database_url) == "postgresql+asyncpg://sombreado_service_reader:sombreado@localhost:5432/consorcio_fenix"
     assert settings.nearby_radius_meters == 100
     assert settings.nearby_limit == 10
+    assert settings.route_candidate_search_limit == 8
     assert settings.off_route_threshold_meters == 75
     assert settings.nominal_bus_speed_kmh == 18
 

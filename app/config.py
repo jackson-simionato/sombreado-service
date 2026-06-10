@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     nearby_radius_meters: float = 100
     nearby_limit: int = 10
+    route_candidate_search_limit: int = 8
     off_route_threshold_meters: float = 75
     nominal_bus_speed_kmh: float = 18
 
