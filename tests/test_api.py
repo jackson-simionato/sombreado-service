@@ -110,6 +110,24 @@ class FakeRouteService:
             )
         ]
 
+    async def find_nearby_route_candidates(self, *, lat, lng, radius_meters, limit):
+        self.last_nearby_route_candidates_request = {
+            "lat": lat,
+            "lng": lng,
+            "radius_meters": radius_meters,
+            "limit": limit,
+        }
+        return [
+            RouteCandidate(
+                route_id="00000000-0000-0000-0000-000000000010",
+                route_version_id="00000000-0000-0000-0000-000000000020",
+                route_code="330",
+                route_name="TILAG - Centro",
+                direction_hints=["TILAG", "Centro"],
+                distance_meters=42.5,
+            )
+        ]
+
 
 class FakeAdvisoryService:
     async def build_onboard_advisory(self, request):
@@ -293,6 +311,100 @@ async def test_manual_route_candidate_search_validation_errors_use_standard_enve
         response = await client.get("/v1/route-candidates/search", params=params)
 
     assert response.status_code == expected_status
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_nearby_route_candidate_discovery_uses_defaults_and_camel_case_response():
+    app = create_app()
+    fake_service = FakeRouteService()
+
+    async def override_route_service():
+        return fake_service
+
+    app.dependency_overrides[get_route_candidate_service] = override_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/route-candidates/nearby", params={"lat": -27.6, "lng": -48.5})
+
+    assert response.status_code == 200
+    assert fake_service.last_nearby_route_candidates_request == {
+        "lat": -27.6,
+        "lng": -48.5,
+        "radius_meters": 1200,
+        "limit": 5,
+    }
+
+    body = response.json()
+    assert body == {
+        "routes": [
+            {
+                "routeId": "00000000-0000-0000-0000-000000000010",
+                "routeVersionId": "00000000-0000-0000-0000-000000000020",
+                "routeCode": "330",
+                "routeName": "TILAG - Centro",
+                "directionHints": ["TILAG", "Centro"],
+                "distanceMeters": 42.5,
+            }
+        ]
+    }
+    candidate = body["routes"][0]
+    assert "routeDirectionId" not in candidate
+    assert "route_direction_id" not in candidate
+    assert "directions" not in candidate
+
+
+@pytest.mark.asyncio
+async def test_nearby_route_candidate_discovery_accepts_explicit_radius_and_limit():
+    app = create_app()
+    fake_service = FakeRouteService()
+
+    async def override_route_service():
+        return fake_service
+
+    app.dependency_overrides[get_route_candidate_service] = override_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/route-candidates/nearby",
+            params={"lat": -27.6, "lng": -48.5, "radiusMeters": 1500, "limit": 3},
+        )
+
+    assert response.status_code == 200
+    assert fake_service.last_nearby_route_candidates_request == {
+        "lat": -27.6,
+        "lng": -48.5,
+        "radius_meters": 1500,
+        "limit": 3,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"lat": -91, "lng": -48.5},
+        {"lat": -27.6, "lng": -181},
+        {"lat": -27.6, "lng": -48.5, "radiusMeters": 0},
+        {"lat": -27.6, "lng": -48.5, "radiusMeters": 2001},
+        {"lat": -27.6, "lng": -48.5, "limit": 0},
+        {"lat": -27.6, "lng": -48.5, "limit": 101},
+    ],
+)
+async def test_nearby_route_candidate_discovery_validation_errors_use_standard_envelope(params):
+    app = create_app()
+    app.dependency_overrides[get_route_candidate_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/route-candidates/nearby", params=params)
+
+    assert response.status_code == 422
     assert response.json() == {
         "error": {
             "code": "validationFailed",

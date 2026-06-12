@@ -67,6 +67,16 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
 ## Public Endpoints
 
 - `GET /health/live`
+- `GET /v1/route-candidates/nearby`
+  - Finds current route candidates near a passenger location for the browser nearby route path.
+  - Query parameters:
+    - `lat`, `lng`: required passenger location.
+    - `radiusMeters`: optional search radius in meters, defaults to `1200`, max `2000`.
+    - `limit`: optional route candidate limit, defaults to `5`, max `100`.
+  - Returns `{ "routes": [...] }` with camelCase Route Candidate fields: `routeId`, `routeVersionId`, `routeCode`, `routeName`, `directionHints`, and `distanceMeters`.
+  - `distanceMeters` is the nearest current segment-geometry distance for the route.
+  - Geometry-less current routes are not returned by nearby discovery.
+  - Route candidates do not include selectable direction identifiers.
 - `GET /v1/route-candidates/search`
   - Searches current route candidates by route code or route name for the browser manual route path.
   - Query parameters:

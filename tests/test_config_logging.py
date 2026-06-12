@@ -13,6 +13,8 @@ def test_settings_defaults_use_read_only_advisory_values():
     )
     assert settings.nearby_radius_meters == 100
     assert settings.nearby_limit == 10
+    assert settings.route_candidate_nearby_radius_meters == 1200
+    assert settings.route_candidate_nearby_limit == 5
     assert settings.route_candidate_search_limit == 8
     assert settings.off_route_threshold_meters == 75
     assert settings.nominal_bus_speed_kmh == 18

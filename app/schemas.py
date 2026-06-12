@@ -31,6 +31,7 @@ class RouteCandidate(BrowserSchema):
     route_code: str
     route_name: str
     direction_hints: list[str] = Field(default_factory=list)
+    distance_meters: float | None = None
 
 
 class RouteCandidatesResponse(BrowserSchema):

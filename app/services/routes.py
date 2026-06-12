@@ -53,6 +53,27 @@ class RouteReadService:
         )
         return _route_candidates_from_rows(rows)
 
+    async def find_nearby_route_candidates(
+        self,
+        *,
+        lat: float,
+        lng: float,
+        radius_meters: float,
+        limit: int,
+    ) -> list[RouteCandidate]:
+        logger.info(
+            "Finding nearby route candidates lat=%s lng=%s radius_meters=%s limit=%s",
+            lat,
+            lng,
+            radius_meters,
+            limit,
+        )
+        rows = await self._session.execute(
+            _nearby_route_candidates_statement(),
+            {"lat": lat, "lng": lng, "radius_meters": radius_meters, "limit": limit},
+        )
+        return _route_candidates_from_rows(rows)
+
     async def list_current_routes(
         self,
         *,
@@ -172,6 +193,21 @@ def _route_candidate_hints_expression():
     return func.coalesce(labels, cast(array([], type_=Text()), ARRAY(Text()))).label("direction_hints")
 
 
+def _route_candidate_hints_cte():
+    return (
+        select(
+            RouteVersionRecord.id.label("route_version_id"),
+            _route_candidate_hints_expression(),
+        )
+        .select_from(RouteVersionRecord)
+        .outerjoin(RouteDirectionRecord, RouteDirectionRecord.route_version_id == RouteVersionRecord.id)
+        .outerjoin(ServiceDirectionRecord, _public_service_direction_join_condition())
+        .where(RouteVersionRecord.is_current == true())
+        .group_by(RouteVersionRecord.id)
+        .cte("route_candidate_hints")
+    )
+
+
 def _search_route_candidates_statement():
     query_pattern = bindparam("query_pattern", type_=Text())
     return (
@@ -197,6 +233,63 @@ def _search_route_candidates_statement():
         .group_by(RouteRecord.id, RouteVersionRecord.id, RouteRecord.code, RouteRecord.name)
         .order_by(RouteRecord.code.asc(), RouteRecord.name.asc())
         .limit(bindparam("limit"))
+    )
+
+
+def _nearby_route_candidates_statement():
+    user_point = _user_point_cte()
+    distance = func.min(func.ST_Distance(_geography(RouteSegmentRecord.geometry), user_point.c.geog)).label(
+        "distance_meters"
+    )
+    nearby_routes = (
+        select(
+            RouteRecord.id.label("route_id"),
+            RouteVersionRecord.id.label("route_version_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+            distance,
+        )
+        .select_from(RouteRecord)
+        .join(RouteVersionRecord, RouteVersionRecord.route_id == RouteRecord.id)
+        .join(RouteDirectionRecord, RouteDirectionRecord.route_version_id == RouteVersionRecord.id)
+        .join(
+            RouteSegmentRecord,
+            and_(
+                RouteSegmentRecord.route_direction_id == RouteDirectionRecord.id,
+                RouteSegmentRecord.route_version_id == RouteVersionRecord.id,
+            ),
+        )
+        .join(user_point, true())
+        .where(
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+            func.ST_DWithin(
+                _geography(RouteSegmentRecord.geometry),
+                user_point.c.geog,
+                bindparam("radius_meters"),
+            ),
+        )
+        .group_by(RouteRecord.id, RouteVersionRecord.id, RouteRecord.code, RouteRecord.name)
+        .order_by(distance.asc(), RouteRecord.code.asc(), RouteRecord.name.asc())
+        .limit(bindparam("limit"))
+        .cte("nearby_routes")
+    )
+    route_candidate_hints = _route_candidate_hints_cte()
+
+    return (
+        select(
+            nearby_routes.c.route_id,
+            nearby_routes.c.route_version_id,
+            nearby_routes.c.route_code,
+            nearby_routes.c.route_name,
+            route_candidate_hints.c.direction_hints,
+            nearby_routes.c.distance_meters,
+        )
+        .select_from(nearby_routes)
+        .join(route_candidate_hints, route_candidate_hints.c.route_version_id == nearby_routes.c.route_version_id)
+        .order_by(
+            nearby_routes.c.distance_meters.asc(), nearby_routes.c.route_code.asc(), nearby_routes.c.route_name.asc()
+        )
     )
 
 
@@ -422,6 +515,7 @@ def _route_candidates_from_rows(rows) -> list[RouteCandidate]:
                 route_code=values["route_code"],
                 route_name=values["route_name"],
                 direction_hints=_dedupe_preserving_order(values["direction_hints"] or []),
+                distance_meters=values["distance_meters"] if "distance_meters" in values else None,
             )
         )
     return candidates
