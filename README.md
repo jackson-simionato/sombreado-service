@@ -15,6 +15,21 @@ Run tests:
 uv run python -m pytest -q
 ```
 
+Run formatting and linting before completing a change:
+
+```bash
+uv run ruff format .
+uv run ruff check .
+```
+
+Install pre-commit hooks:
+
+```bash
+uv run pre-commit install
+```
+
+See `docs/engineering-standards.md` for branch, commit, PR, and agent workflow standards.
+
 The project targets Python 3.14 through `.python-version` and `requires-python = ">=3.14"`.
 
 ## Database Access

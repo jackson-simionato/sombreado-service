@@ -7,7 +7,10 @@ from app.logging import configure_logging, get_logger
 def test_settings_defaults_use_read_only_advisory_values():
     settings = Settings(_env_file=None)
 
-    assert str(settings.database_url) == "postgresql+asyncpg://sombreado_service_reader:sombreado@localhost:5432/consorcio_fenix"
+    assert (
+        str(settings.database_url)
+        == "postgresql+asyncpg://sombreado_service_reader:sombreado@localhost:5432/consorcio_fenix"
+    )
     assert settings.nearby_radius_meters == 100
     assert settings.nearby_limit == 10
     assert settings.route_candidate_search_limit == 8
