@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,6 +10,7 @@ from app.routes.nearby import get_route_service
 from app.routes.route_candidates import get_route_service as get_route_candidate_service
 from app.schemas import (
     CandidateRouteDirection,
+    DirectionChoice,
     ExposureDirection,
     ExposureWindow,
     LightweightRouteDirection,
@@ -68,6 +70,25 @@ class FakeRouteService:
     async def load_current_route_directions(self, route_id):
         route = await self.load_current_route(route_id)
         return route.directions if route else []
+
+    async def load_current_route_version_id(self, route_id):
+        if str(route_id) == "00000000-0000-0000-0000-000000000001":
+            return UUID("00000000-0000-0000-0000-000000000002")
+        if str(route_id) == "00000000-0000-0000-0000-000000000010":
+            return UUID("00000000-0000-0000-0000-000000000020")
+        return None
+
+    async def load_direction_choices(self, *, route_version_id):
+        if str(route_version_id) == "00000000-0000-0000-0000-000000000002":
+            return [
+                DirectionChoice(
+                    route_direction_id="00000000-0000-0000-0000-000000000003",
+                    sequence=1,
+                    name="Centro > Lagoa",
+                    departure_labels=["Saida TICEN"],
+                )
+            ]
+        return []
 
     async def load_current_route_segments(self, *, route_version_id, route_direction_id):
         if str(route_direction_id) == "00000000-0000-0000-0000-000000000003":
@@ -216,15 +237,100 @@ async def test_route_detail_endpoint_returns_404_for_non_current_route():
 
 
 @pytest.mark.asyncio
-async def test_route_directions_endpoint_returns_current_directions():
+async def test_direction_choices_validate_route_version_and_return_camel_case_response():
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/v1/routes/00000000-0000-0000-0000-000000000001/directions")
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000001/directions",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        )
 
     assert response.status_code == 200
-    assert response.json()["directions"][0]["name"] == "Centro > Lagoa"
+    assert response.json() == {
+        "directions": [
+            {
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "sequence": 1,
+                "name": "Centro > Lagoa",
+                "departureLabels": ["Saida TICEN"],
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_direction_choices_return_empty_list_for_current_route_without_directions():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000010/directions",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000020"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"directions": []}
+
+
+@pytest.mark.asyncio
+async def test_direction_choices_return_route_not_found_error():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000099/directions",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "routeNotFound"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_direction_choices_return_stale_version_error():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000001/directions",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000099"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "routeVersionStale"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_id", "params"),
+    [
+        ("not-a-uuid", {"routeVersionId": "00000000-0000-0000-0000-000000000002"}),
+        ("00000000-0000-0000-0000-000000000001", {"routeVersionId": "not-a-uuid"}),
+        ("00000000-0000-0000-0000-000000000001", {}),
+    ],
+)
+async def test_direction_choices_validation_errors_use_standard_envelope(route_id, params):
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/v1/routes/{route_id}/directions", params=params)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()
 
 
 @pytest.mark.asyncio

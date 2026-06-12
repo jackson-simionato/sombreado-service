@@ -14,7 +14,8 @@ class MappingRow:
 
 
 class FakeResult(list):
-    pass
+    def first(self):
+        return self[0] if self else None
 
 
 class FakeSession:
@@ -384,6 +385,37 @@ async def test_load_current_route_returns_none_when_not_found():
     assert "routes.id = %(route_id)s" in sql
 
 
+async def test_load_current_route_version_id_returns_current_version_without_requiring_directions():
+    session = FakeSession(
+        FakeResult(
+            [
+                SimpleNamespace(
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    route_version_id = await service.load_current_route_version_id(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert route_version_id == UUID("00000000-0000-0000-0000-000000000002")
+    sql = _assert_core_statement(session.calls[0][0])
+    assert "routes.id = %(route_id)s" in sql
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "route_directions" not in sql
+
+
+async def test_load_current_route_version_id_returns_none_for_missing_current_route():
+    session = FakeSession(FakeResult([]))
+    service = RouteReadService(session)
+
+    route_version_id = await service.load_current_route_version_id(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert route_version_id is None
+
+
 async def test_load_current_route_directions_maps_labels():
     session = FakeSession(
         FakeResult(
@@ -441,6 +473,59 @@ async def test_load_current_route_directions_uses_public_departure_label_semanti
     assert "service_directions.confidence IN" in sql
     assert "service_directions.route_direction_id IS NOT NULL" in sql
     assert "service_directions.sequence ASC" in sql
+
+
+async def test_load_direction_choices_maps_rows_for_current_version():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    sequence=1,
+                    name="Centro > Lagoa",
+                    departure_labels=["TICEN", "Centro", "TICEN"],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_direction_choices(route_version_id=UUID("00000000-0000-0000-0000-000000000002"))
+
+    assert directions[0].route_direction_id == UUID("00000000-0000-0000-0000-000000000003")
+    assert directions[0].sequence == 1
+    assert directions[0].name == "Centro > Lagoa"
+    assert directions[0].departure_labels == ["TICEN", "Centro"]
+
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "route_directions.route_version_id = %(route_version_id)s" in sql
+    assert "service_directions.confidence IN" in sql
+    assert "service_directions.route_direction_id IS NOT NULL" in sql
+    assert "route_directions.sequence ASC" in sql
+    assert "service_directions.sequence ASC" in sql
+    assert params["route_version_id"] == UUID("00000000-0000-0000-0000-000000000002")
+
+
+async def test_load_direction_choices_keeps_direction_when_public_labels_are_empty():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    sequence=1,
+                    name="Centro > Lagoa",
+                    departure_labels=[],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_direction_choices(route_version_id=UUID("00000000-0000-0000-0000-000000000002"))
+
+    assert len(directions) == 1
+    assert directions[0].departure_labels == []
 
 
 async def test_load_current_route_directions_keeps_direction_when_public_labels_are_empty():

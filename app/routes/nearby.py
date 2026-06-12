@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings_dependency
 from app.db import get_session
+from app.errors import PublicApiError, parse_public_uuid
 from app.schemas import (
     NearbyRouteDirectionsResponse,
     RouteDirectionsResponse,
@@ -64,12 +65,22 @@ async def route_detail(
 
 @router.get("/routes/{route_id}/directions", response_model=RouteDirectionsResponse)
 async def route_directions(
-    route_id: UUID,
+    route_id: str,
     route_service: Annotated[RouteReadService, Depends(get_route_service)],
+    route_version_id_text: Annotated[str, Query(alias="routeVersionId")],
 ) -> RouteDirectionsResponse:
-    directions = await route_service.load_current_route_directions(route_id)
-    if not directions:
-        raise HTTPException(status_code=404, detail="current route not found")
+    parsed_route_id = parse_public_uuid(route_id)
+    route_version_id = parse_public_uuid(route_version_id_text)
+    current_route_version_id = await route_service.load_current_route_version_id(parsed_route_id)
+    if current_route_version_id is None:
+        raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
+    if current_route_version_id != route_version_id:
+        raise PublicApiError(
+            status_code=409,
+            code="routeVersionStale",
+            message="Selected route version is no longer current.",
+        )
+    directions = await route_service.load_direction_choices(route_version_id=route_version_id)
     return RouteDirectionsResponse(directions=directions)
 
 

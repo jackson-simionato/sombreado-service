@@ -13,7 +13,14 @@ from app.models import (
     RouteVersionRecord,
     ServiceDirectionRecord,
 )
-from app.schemas import CandidateRouteDirection, LightweightRouteDirection, RouteCandidate, RouteSegment, RouteSummary
+from app.schemas import (
+    CandidateRouteDirection,
+    DirectionChoice,
+    LightweightRouteDirection,
+    RouteCandidate,
+    RouteSegment,
+    RouteSummary,
+)
 from app.services.geometry import parse_linestring_wkt
 
 logger = get_logger(__name__)
@@ -103,6 +110,23 @@ class RouteReadService:
     async def load_current_route(self, route_id: UUID) -> RouteSummary | None:
         routes = await self._load_current_routes_by_id(route_id=route_id)
         return routes[0] if routes else None
+
+    async def load_current_route_version_id(self, route_id: UUID) -> UUID | None:
+        rows = await self._session.execute(_current_route_version_statement(), {"route_id": route_id})
+        row = rows.first()
+        return row.route_version_id if row else None
+
+    async def load_direction_choices(self, *, route_version_id: UUID) -> list[DirectionChoice]:
+        rows = await self._session.execute(_direction_choices_statement(), {"route_version_id": route_version_id})
+        return [
+            DirectionChoice(
+                route_direction_id=values["route_direction_id"],
+                sequence=values["sequence"],
+                name=values["name"],
+                departure_labels=_dedupe_preserving_order(values["departure_labels"] or []),
+            )
+            for values in (row._mapping for row in rows)
+        ]
 
     async def load_current_route_directions(self, route_id: UUID) -> list[LightweightRouteDirection]:
         route = await self.load_current_route(route_id)
@@ -438,6 +462,35 @@ def _load_current_route_statement():
             RouteVersionRecord.is_current == true(),
             RouteRecord.id == bindparam("route_id"),
         )
+        .order_by(RouteDirectionRecord.sequence.asc())
+    )
+
+
+def _current_route_version_statement():
+    return (
+        select(RouteVersionRecord.id.label("route_version_id"))
+        .select_from(RouteRecord)
+        .join(RouteVersionRecord, RouteVersionRecord.route_id == RouteRecord.id)
+        .where(
+            RouteRecord.id == bindparam("route_id"),
+            RouteRecord.is_current == true(),
+            RouteVersionRecord.is_current == true(),
+        )
+    )
+
+
+def _direction_choices_statement():
+    direction_labels = _direction_labels_cte()
+    return (
+        select(
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteDirectionRecord.sequence,
+            RouteDirectionRecord.name,
+            direction_labels.c.departure_labels,
+        )
+        .select_from(RouteDirectionRecord)
+        .join(direction_labels, direction_labels.c.route_direction_id == RouteDirectionRecord.id)
+        .where(RouteDirectionRecord.route_version_id == bindparam("route_version_id"))
         .order_by(RouteDirectionRecord.sequence.asc())
     )
 

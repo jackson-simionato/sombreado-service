@@ -57,7 +57,7 @@ A non-selectable departure label shown on a route candidate to help a passenger 
 _Avoid_: Direction choice, direction identifier, route direction name
 
 **Direction Choice**:
-A selectable current route direction for a selected route candidate.
+A selectable current route direction for a selected route candidate. Its usability comes from current route-direction data, not from departure-label or geometry availability.
 _Avoid_: Segment geometry, service timetable
 
 **Departure Label**:
@@ -102,6 +102,7 @@ _Avoid_: Raw solar elevation, azimuth debug value
 - A **Direction Choice** may have zero, one, or many **Departure Labels**.
 - Public **Departure Labels** use high or medium **Direction Match Confidence**.
 - **Departure Labels** do not determine whether a **Direction Choice** is usable.
+- **Route Geometry** does not determine whether a **Direction Choice** is usable.
 - **Route Geometry** belongs to exactly one current **Direction Choice**.
 - A **Route Candidate** does not include **Route Geometry**.
 - **Advice** is requested after a passenger selects a **Direction Choice**.

@@ -45,6 +45,13 @@ class LightweightRouteDirection(BaseModel):
     departure_labels: list[str] = Field(default_factory=list)
 
 
+class DirectionChoice(BrowserSchema):
+    route_direction_id: UUID
+    sequence: int
+    name: str
+    departure_labels: list[str] = Field(default_factory=list)
+
+
 class RouteSummary(BaseModel):
     route_id: UUID
     route_code: str
@@ -58,8 +65,11 @@ class RoutesResponse(BaseModel):
     routes: list[RouteSummary]
 
 
-class RouteDirectionsResponse(BaseModel):
-    directions: list[LightweightRouteDirection]
+class DirectionChoicesResponse(BrowserSchema):
+    directions: list[DirectionChoice]
+
+
+RouteDirectionsResponse = DirectionChoicesResponse
 
 
 class CandidateRouteDirection(BaseModel):
