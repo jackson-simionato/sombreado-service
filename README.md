@@ -66,6 +66,11 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
 
 ## Public Endpoints
 
+The browser contract uses camelCase JSON and UUID-shaped public identifiers at the
+service boundary. Browser/frontend code should still treat `routeId`,
+`routeVersionId`, and `routeDirectionId` as opaque strings rather than parsing
+meaning from them.
+
 - `GET /health/live`
 - `GET /v1/route-candidates/nearby`
   - Finds current route candidates near a passenger location for the browser nearby route path.
@@ -76,7 +81,24 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
   - Returns `{ "routes": [...] }` with camelCase Route Candidate fields: `routeId`, `routeVersionId`, `routeCode`, `routeName`, `directionHints`, and `distanceMeters`.
   - `distanceMeters` is the nearest current segment-geometry distance for the route.
   - Geometry-less current routes are not returned by nearby discovery.
+  - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
+  - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
   - Route candidates do not include selectable direction identifiers.
+  - Example response:
+    ```json
+    {
+      "routes": [
+        {
+          "routeId": "00000000-0000-0000-0000-000000000001",
+          "routeVersionId": "00000000-0000-0000-0000-000000000002",
+          "routeCode": "330",
+          "routeName": "Lagoa da Conceicao",
+          "directionHints": ["TICEN", "Lagoa"],
+          "distanceMeters": 84.5
+        }
+      ]
+    }
+    ```
 - `GET /v1/route-candidates/search`
   - Searches current route candidates by route code or route name for the browser manual route path.
   - Query parameters:
@@ -86,10 +108,62 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
   - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
   - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
   - Route candidates do not include selectable direction identifiers.
-- `GET /v1/routes/{route_id}/directions`
-  - Returns lightweight current directions for one route.
-- `GET /v1/routes/{route_id}/directions/{route_direction_id}/geometry`
-  - Returns ordered current segment geometry for one selected route direction.
+  - Example response:
+    ```json
+    {
+      "routes": [
+        {
+          "routeId": "00000000-0000-0000-0000-000000000001",
+          "routeVersionId": "00000000-0000-0000-0000-000000000002",
+          "routeCode": "330",
+          "routeName": "Lagoa da Conceicao",
+          "directionHints": []
+        }
+      ]
+    }
+    ```
+- `GET /v1/routes/{routeId}/directions?routeVersionId={routeVersionId}`
+  - Returns selectable current Direction Choices for one selected Route Candidate.
+  - `routeVersionId` is required so saved or stale client selections can be rejected explicitly.
+  - Returns `{ "directions": [...] }` with `routeDirectionId`, `sequence`, `name`, and `departureLabels`.
+  - `departureLabels` follow the same high/medium confidence linked service-direction semantics as Direction Hints; empty `departureLabels` is valid.
+  - Missing current routes return `404 routeNotFound`.
+  - Stale route versions return `409 routeVersionStale`.
+  - A current route with no selectable current directions returns `200` with `directions: []`.
+  - Example response:
+    ```json
+    {
+      "directions": [
+        {
+          "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+          "sequence": 1,
+          "name": "Centro",
+          "departureLabels": ["TICEN"]
+        }
+      ]
+    }
+    ```
+- `GET /v1/routes/{routeId}/directions/{routeDirectionId}/geometry?routeVersionId={routeVersionId}`
+  - Returns Route Geometry for one selected Direction Choice.
+  - `routeVersionId` is required so saved or stale client selections can be rejected explicitly.
+  - Returns `routeId`, `routeVersionId`, `routeDirectionId`, and `polyline`.
+  - `polyline` is an ordered list of `{ "lat": ..., "lng": ... }` points with adjacent duplicate joins removed.
+  - Missing current routes return `404 routeNotFound`.
+  - Stale route versions return `409 routeVersionStale`.
+  - Missing current directions return `404 routeDirectionNotFound`.
+  - Valid current route/version/direction selections with no materialized segment geometry return `200` with `polyline: []`.
+  - Example response:
+    ```json
+    {
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "polyline": [
+        { "lat": -27.6, "lng": -48.5 },
+        { "lat": -27.601, "lng": -48.499 }
+      ]
+    }
+    ```
 - `POST /v1/advice`
   - Computes browser-contract Advice for a selected current route direction.
   - Supports `mode: "preview"` and `mode: "onboard"` with `horizon: "upcoming"` or `horizon: "remainingRoute"`.
@@ -170,6 +244,11 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
     ```
   - Valid selections with no materialized geometry return withheld Advice with `reasonCode: "missingRouteGeometry"`.
   - Valid selections whose selected horizon has no computable distance return withheld Advice with `reasonCode: "noAdviceForSelectedHorizon"`.
+  - Missing current routes return `404 routeNotFound`.
+  - Stale route versions return `409 routeVersionStale`.
+  - Missing current directions return `404 routeDirectionNotFound`.
+  - `sunCondition` describes the selected Advice Horizon as `night`, `lowSun`, `daylight`, or `overhead`.
+  - `recommendedSeatArea` is produced by the backend as `left`, `right`, `front`, `back`, or `neutral`; the browser should not derive it from raw exposure fields.
   - Example withheld response:
     ```json
     {
@@ -202,3 +281,11 @@ All non-2xx responses from `/v1` use the standard envelope:
 - Stale route versions return `409 routeVersionStale`.
 - Missing current directions return `404 routeDirectionNotFound`.
 - Unexpected `/v1` service-side failures return `503 serviceUnavailable`.
+
+Retired public endpoints are not available in the browser contract:
+
+- `GET /v1/routes`
+- `GET /v1/routes/{routeId}`
+- `GET /v1/nearby-route-directions`
+- `GET /v1/route-directions/{routeDirectionId}/segments`
+- `POST /v1/onboard-advisories`
