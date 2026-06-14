@@ -179,6 +179,26 @@ class FakeAdvisoryService:
             remaining_route=None,
         )
 
+    async def build_advice(self, request):
+        self.last_advice_request = request
+        return {
+            "status": "advice",
+            "mode": "preview",
+            "horizon": "remainingRoute",
+            "route_id": UUID("00000000-0000-0000-0000-000000000001"),
+            "route_version_id": UUID("00000000-0000-0000-0000-000000000002"),
+            "route_direction_id": UUID("00000000-0000-0000-0000-000000000003"),
+            "direct_sun_exposure": "left",
+            "recommended_seat_area": "right",
+            "sun_condition": "daylight",
+            "computed_at": datetime(2026, 1, 15, 15, tzinfo=UTC),
+            "position": {
+                "lat": -27.6,
+                "lng": -48.5,
+                "source": "directionStart",
+            },
+        }
+
 
 async def fake_route_service():
     return FakeRouteService()
@@ -707,3 +727,138 @@ async def test_onboard_advisory_endpoint_uses_advisory_service():
     assert response.status_code == 200
     assert response.json()["status"] == "advisory"
     assert response.json()["upcoming_window"]["dominant_direction"] == "left"
+
+
+@pytest.mark.asyncio
+async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case():
+    app = create_app()
+    fake_service = FakeAdvisoryService()
+
+    async def override_advisory_service():
+        return fake_service
+
+    app.dependency_overrides[get_advisory_service] = override_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "preview",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "advice",
+        "mode": "preview",
+        "horizon": "remainingRoute",
+        "routeId": "00000000-0000-0000-0000-000000000001",
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
+        "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+        "directSunExposure": "left",
+        "recommendedSeatArea": "right",
+        "sunCondition": "daylight",
+        "computedAt": "2026-01-15T15:00:00Z",
+        "position": {
+            "lat": -27.6,
+            "lng": -48.5,
+            "source": "directionStart",
+        },
+    }
+    assert fake_service.last_advice_request.route_id == UUID("00000000-0000-0000-0000-000000000001")
+    assert fake_service.last_advice_request.route_version_id == UUID("00000000-0000-0000-0000-000000000002")
+    assert fake_service.last_advice_request.route_direction_id == UUID("00000000-0000-0000-0000-000000000003")
+
+
+@pytest.mark.asyncio
+async def test_advice_endpoint_rejects_preview_request_with_location():
+    app = create_app()
+    app.dependency_overrides[get_advisory_service] = fake_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "preview",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "location": {
+                    "lat": -27.6,
+                    "lng": -48.5,
+                    "observedAt": "2026-01-15T14:59:00+00:00",
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validationFailed"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exists():
+    app = create_app()
+    app.dependency_overrides[get_advisory_service] = fake_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validationFailed"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload_update",
+    [
+        {"routeId": "not-a-uuid"},
+        {"routeVersionId": "not-a-uuid"},
+        {"routeDirectionId": "not-a-uuid"},
+        {"observedAt": "2026-01-15T15:00:00"},
+        {"mode": "unsupported"},
+        {"horizon": "all"},
+    ],
+)
+async def test_advice_endpoint_validation_errors_use_standard_envelope(payload_update):
+    app = create_app()
+    app.dependency_overrides[get_advisory_service] = fake_advisory_service
+    payload = {
+        "routeId": "00000000-0000-0000-0000-000000000001",
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
+        "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+        "mode": "preview",
+        "horizon": "remainingRoute",
+        "observedAt": "2026-01-15T15:00:00+00:00",
+    }
+    payload.update(payload_update)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/v1/advice", json=payload)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()

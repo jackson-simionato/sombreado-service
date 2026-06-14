@@ -104,4 +104,55 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
     - `lat`, `lng`: required passenger location.
     - `radius_meters`: optional search radius, defaults to `100`.
     - `limit`: optional result limit, defaults to `10`, max `100`.
+- `POST /v1/advice`
+  - Computes browser-contract Advice for a selected current route direction.
+  - Issue #7 supports `mode: "preview"` with `horizon: "upcoming"` or `horizon: "remainingRoute"`.
+  - Preview requests use top-level `observedAt` and UUID-shaped `routeId`, `routeVersionId`, and `routeDirectionId`.
+  - Preview mode anchors at the selected direction start and must not include `location`.
+  - Example preview request:
+    ```json
+    {
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "mode": "preview",
+      "horizon": "remainingRoute",
+      "observedAt": "2026-01-15T15:00:00+00:00"
+    }
+    ```
+  - Example successful preview response:
+    ```json
+    {
+      "status": "advice",
+      "mode": "preview",
+      "horizon": "remainingRoute",
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "directSunExposure": "left",
+      "recommendedSeatArea": "right",
+      "sunCondition": "daylight",
+      "computedAt": "2026-01-15T15:00:00Z",
+      "position": {
+        "lat": -27.6,
+        "lng": -48.5,
+        "source": "directionStart"
+      }
+    }
+    ```
+  - Valid selections with no materialized geometry return withheld Advice with `reasonCode: "missingRouteGeometry"`.
+  - Valid selections whose selected horizon has no computable distance return withheld Advice with `reasonCode: "noAdviceForSelectedHorizon"`.
+  - Example withheld response:
+    ```json
+    {
+      "status": "withheld",
+      "mode": "preview",
+      "horizon": "remainingRoute",
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "reasonCode": "missingRouteGeometry",
+      "computedAt": "2026-01-15T15:00:00Z"
+    }
+    ```
 - `POST /v1/onboard-advisories`
