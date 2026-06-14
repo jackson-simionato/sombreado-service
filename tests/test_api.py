@@ -104,6 +104,12 @@ class FakeRouteService:
             ]
         return []
 
+    async def route_direction_belongs_to_version(self, *, route_version_id, route_direction_id):
+        return str(route_version_id) == "00000000-0000-0000-0000-000000000002" and str(route_direction_id) in {
+            "00000000-0000-0000-0000-000000000003",
+            "00000000-0000-0000-0000-000000000004",
+        }
+
     async def find_nearby_route_directions(self, *, lat, lng, radius_meters, limit):
         return [
             CandidateRouteDirection(
@@ -521,7 +527,141 @@ async def test_nearby_route_candidate_discovery_validation_errors_use_standard_e
 
 
 @pytest.mark.asyncio
-async def test_route_direction_segments_endpoint_returns_current_geometry():
+async def test_route_geometry_endpoint_returns_frontend_polyline():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000001/directions/00000000-0000-0000-0000-000000000003/geometry",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "routeId": "00000000-0000-0000-0000-000000000001",
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
+        "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+        "polyline": [
+            {"lat": -27.6, "lng": -48.5},
+            {"lat": -27.6, "lng": -48.49},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_route_geometry_endpoint_returns_empty_polyline_when_geometry_is_missing():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000001/directions/00000000-0000-0000-0000-000000000004/geometry",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "routeId": "00000000-0000-0000-0000-000000000001",
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
+        "routeDirectionId": "00000000-0000-0000-0000-000000000004",
+        "polyline": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_route_geometry_endpoint_returns_route_not_found_error():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000099/directions/00000000-0000-0000-0000-000000000003/geometry",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "routeNotFound"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_route_geometry_endpoint_returns_stale_version_error():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000001/directions/00000000-0000-0000-0000-000000000003/geometry",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000099"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "routeVersionStale"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_route_geometry_endpoint_returns_direction_not_found_error():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/v1/routes/00000000-0000-0000-0000-000000000001/directions/00000000-0000-0000-0000-000000000099/geometry",
+            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "routeDirectionNotFound"
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_id", "route_direction_id", "params"),
+    [
+        (
+            "not-a-uuid",
+            "00000000-0000-0000-0000-000000000003",
+            {"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        ),
+        (
+            "00000000-0000-0000-0000-000000000001",
+            "not-a-uuid",
+            {"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+        ),
+        (
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000003",
+            {"routeVersionId": "not-a-uuid"},
+        ),
+        (
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000003",
+            {},
+        ),
+    ],
+)
+async def test_route_geometry_validation_errors_use_standard_envelope(route_id, route_direction_id, params):
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/v1/routes/{route_id}/directions/{route_direction_id}/geometry", params=params)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_legacy_route_direction_segments_endpoint_is_removed():
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
 
@@ -531,10 +671,20 @@ async def test_route_direction_segments_endpoint_returns_current_geometry():
             params={"route_version_id": "00000000-0000-0000-0000-000000000002"},
         )
 
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_openapi_exposes_browser_geometry_endpoint_without_legacy_segments_endpoint():
+    app = create_app()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/openapi.json")
+
     assert response.status_code == 200
-    body = response.json()
-    assert body["route_direction_id"] == "00000000-0000-0000-0000-000000000003"
-    assert body["segments"][0]["coordinates"] == [[-48.5, -27.6], [-48.49, -27.6]]
+    paths = response.json()["paths"]
+    assert "/v1/routes/{route_id}/directions/{route_direction_id}/geometry" in paths
+    assert "/v1/route-directions/{route_direction_id}/segments" not in paths
 
 
 @pytest.mark.asyncio

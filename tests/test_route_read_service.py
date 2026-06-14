@@ -5,7 +5,8 @@ import pytest
 from sqlalchemy.sql.elements import TextClause
 
 from app.models import ServiceDirectionRecord
-from app.services.routes import RouteReadService
+from app.schemas import RouteSegment
+from app.services.routes import RouteReadService, flatten_route_polyline
 
 
 class MappingRow:
@@ -528,6 +529,46 @@ async def test_load_direction_choices_keeps_direction_when_public_labels_are_emp
     assert directions[0].departure_labels == []
 
 
+async def test_route_direction_belongs_to_version_returns_true_for_matching_direction():
+    session = FakeSession(
+        FakeResult(
+            [
+                SimpleNamespace(
+                    id=UUID("00000000-0000-0000-0000-000000000003"),
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    belongs = await service.route_direction_belongs_to_version(
+        route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+        route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+    )
+
+    assert belongs is True
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "route_directions.route_version_id = %(route_version_id)s" in sql
+    assert "route_directions.id = %(route_direction_id)s" in sql
+    assert params == {
+        "route_version_id": UUID("00000000-0000-0000-0000-000000000002"),
+        "route_direction_id": UUID("00000000-0000-0000-0000-000000000003"),
+    }
+
+
+async def test_route_direction_belongs_to_version_returns_false_for_missing_direction():
+    session = FakeSession(FakeResult([]))
+    service = RouteReadService(session)
+
+    belongs = await service.route_direction_belongs_to_version(
+        route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+        route_direction_id=UUID("00000000-0000-0000-0000-000000000099"),
+    )
+
+    assert belongs is False
+
+
 async def test_load_current_route_directions_keeps_direction_when_public_labels_are_empty():
     session = FakeSession(
         FakeResult(
@@ -552,6 +593,56 @@ async def test_load_current_route_directions_keeps_direction_when_public_labels_
 
     assert len(directions) == 1
     assert directions[0].departure_labels == []
+
+
+def test_flatten_route_polyline_converts_lng_lat_segments_to_lat_lng_points():
+    segments = [
+        RouteSegment(
+            id=UUID("00000000-0000-0000-0000-000000000004"),
+            sequence=1,
+            coordinates=[(-48.5, -27.6), (-48.49, -27.6)],
+            bearing_degrees=90,
+            distance_meters=986,
+            cumulative_distance_meters=986,
+        )
+    ]
+
+    polyline = flatten_route_polyline(segments)
+
+    assert [point.model_dump() for point in polyline] == [
+        {"lat": -27.6, "lng": -48.5},
+        {"lat": -27.6, "lng": -48.49},
+    ]
+
+
+def test_flatten_route_polyline_removes_only_adjacent_duplicate_join_points():
+    segments = [
+        RouteSegment(
+            id=UUID("00000000-0000-0000-0000-000000000004"),
+            sequence=1,
+            coordinates=[(-48.5, -27.6), (-48.49, -27.6), (-48.48, -27.61)],
+            bearing_degrees=90,
+            distance_meters=986,
+            cumulative_distance_meters=986,
+        ),
+        RouteSegment(
+            id=UUID("00000000-0000-0000-0000-000000000005"),
+            sequence=2,
+            coordinates=[(-48.48, -27.61), (-48.5, -27.6)],
+            bearing_degrees=270,
+            distance_meters=986,
+            cumulative_distance_meters=1972,
+        ),
+    ]
+
+    polyline = flatten_route_polyline(segments)
+
+    assert [point.model_dump() for point in polyline] == [
+        {"lat": -27.6, "lng": -48.5},
+        {"lat": -27.6, "lng": -48.49},
+        {"lat": -27.61, "lng": -48.48},
+        {"lat": -27.6, "lng": -48.5},
+    ]
 
 
 async def test_load_current_route_segments_maps_ordered_linestring_rows():

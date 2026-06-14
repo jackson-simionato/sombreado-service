@@ -97,10 +97,16 @@ class RouteSegment(BaseModel):
     cumulative_distance_meters: float
 
 
-class RouteGeometryResponse(BaseModel):
+class LatLngPoint(BrowserSchema):
+    lat: float
+    lng: float
+
+
+class RouteGeometryResponse(BrowserSchema):
+    route_id: UUID
     route_version_id: UUID
     route_direction_id: UUID
-    segments: list[RouteSegment]
+    polyline: list[LatLngPoint] = Field(default_factory=list)
 
 
 class SegmentForAdvisory(BaseModel):

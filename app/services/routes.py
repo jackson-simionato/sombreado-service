@@ -16,6 +16,7 @@ from app.models import (
 from app.schemas import (
     CandidateRouteDirection,
     DirectionChoice,
+    LatLngPoint,
     LightweightRouteDirection,
     RouteCandidate,
     RouteSegment,
@@ -127,6 +128,18 @@ class RouteReadService:
             )
             for values in (row._mapping for row in rows)
         ]
+
+    async def route_direction_belongs_to_version(
+        self,
+        *,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> bool:
+        rows = await self._session.execute(
+            _route_direction_membership_statement(),
+            {"route_version_id": route_version_id, "route_direction_id": route_direction_id},
+        )
+        return rows.first() is not None
 
     async def load_current_route_directions(self, route_id: UUID) -> list[LightweightRouteDirection]:
         route = await self.load_current_route(route_id)
@@ -495,6 +508,13 @@ def _direction_choices_statement():
     )
 
 
+def _route_direction_membership_statement():
+    return select(RouteDirectionRecord.id).where(
+        RouteDirectionRecord.route_version_id == bindparam("route_version_id"),
+        RouteDirectionRecord.id == bindparam("route_direction_id"),
+    )
+
+
 def _load_current_route_segments_statement():
     return (
         select(
@@ -517,6 +537,17 @@ def _load_current_route_segments_statement():
         )
         .order_by(RouteSegmentRecord.sequence.asc())
     )
+
+
+def flatten_route_polyline(segments: list[RouteSegment]) -> list[LatLngPoint]:
+    polyline: list[LatLngPoint] = []
+    for segment in segments:
+        for lng, lat in segment.coordinates:
+            point = LatLngPoint(lat=lat, lng=lng)
+            if polyline and polyline[-1] == point:
+                continue
+            polyline.append(point)
+    return polyline
 
 
 def _route_summaries_from_rows(rows) -> list[RouteSummary]:
