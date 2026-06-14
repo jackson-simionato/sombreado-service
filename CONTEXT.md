@@ -74,7 +74,11 @@ _Avoid_: Route candidate, stop list
 
 **Advice**:
 A passenger-facing sun-side result for a selected current direction.
-_Avoid_: Onboard advisory, route discovery result
+_Avoid_: Preview Advice, Onboard advisory, route discovery result
+
+**Advice Mode**:
+The passenger context used to compute Advice, either onboard from a passenger location or preview from the selected route direction.
+_Avoid_: Preview Advice, onboard advisory type, advice endpoint variant
 
 **Advice Horizon**:
 The route window used to compute advice, either the upcoming portion near the passenger or the remaining route.
@@ -83,6 +87,10 @@ _Avoid_: Include remaining flag, response section
 **Sun Condition**:
 A coarse daylight context attached to advice, such as night, low sun, daylight, or overhead sun.
 _Avoid_: Raw solar elevation, azimuth debug value
+
+**Seat-area Recommendation**:
+The passenger-facing seating area suggested by Advice to reduce direct sun exposure, such as left, right, front, back, or neutral.
+_Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure inversion
 
 ## Relationships
 
@@ -106,8 +114,10 @@ _Avoid_: Raw solar elevation, azimuth debug value
 - **Route Geometry** belongs to exactly one current **Direction Choice**.
 - A **Route Candidate** does not include **Route Geometry**.
 - **Advice** is requested after a passenger selects a **Direction Choice**.
+- An **Advice Mode** distinguishes onboard passenger context from route preview context for **Advice**.
 - An **Advice Horizon** selects one computation window for an **Advice** result.
 - A **Sun Condition** describes the selected **Advice Horizon**, not individual route segments.
+- A **Seat-area Recommendation** is produced by **Advice** and is not derived by the browser client.
 - A **Render Deployment** runs the **Sombreado Service** and is triggered by GitHub Actions after CI passes on `main`.
 - A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it.
 - A **Runtime Secret** belongs in Render when the running service needs it.
