@@ -31,11 +31,11 @@ class AdvisoryService:
         self._settings = settings
 
     async def build_advice(self, request: AdviceComputationRequest) -> AdviceResponse:
-        if request.mode is not AdviceMode.preview:
+        if request.mode not in {AdviceMode.onboard, AdviceMode.preview}:
             raise PublicApiError(
                 status_code=422,
                 code="validationFailed",
-                message="Only preview advice is implemented.",
+                message="Request validation failed.",
             )
 
         current_route_version_id = await self._route_service.load_current_route_version_id(request.route_id)
@@ -72,15 +72,89 @@ class AdvisoryService:
                 computed_at=request.observed_at,
             )
 
+        if request.mode is AdviceMode.onboard:
+            if request.location is None:
+                raise PublicApiError(
+                    status_code=422,
+                    code="validationFailed",
+                    message="Onboard advice requires location.",
+                )
+
+            projection = project_location_to_segments(
+                lat=request.location.lat,
+                lng=request.location.lng,
+                segments=segments,
+            )
+            if projection.distance_from_route_meters > self._settings.off_route_threshold_meters:
+                if request.fallback_to_preview:
+                    preview_request = request.model_copy(update={"mode": AdviceMode.preview})
+                    preview_segments = _segments_from_direction_start(
+                        segments,
+                        max_distance_meters=_max_distance_for_horizon(
+                            horizon=request.horizon,
+                            nominal_bus_speed_kmh=self._settings.nominal_bus_speed_kmh,
+                        ),
+                    )
+                    if sum(segment.distance_meters for segment in preview_segments) <= 0:
+                        return AdviceWithheld(
+                            mode=preview_request.mode,
+                            horizon=preview_request.horizon,
+                            route_id=preview_request.route_id,
+                            route_version_id=preview_request.route_version_id,
+                            route_direction_id=preview_request.route_direction_id,
+                            reason_code="noAdviceForSelectedHorizon",
+                            computed_at=preview_request.observed_at,
+                        )
+                    return _build_advice_success(
+                        request=preview_request,
+                        segments=preview_segments,
+                        position=_direction_start_position(segments),
+                    )
+                return AdviceWithheld(
+                    mode=request.mode,
+                    horizon=request.horizon,
+                    route_id=request.route_id,
+                    route_version_id=request.route_version_id,
+                    route_direction_id=request.route_direction_id,
+                    reason_code="locationOffRoute",
+                    computed_at=request.observed_at,
+                )
+
+            selected_segments = segments_after_projection(
+                segments,
+                projection,
+                max_distance_meters=_max_distance_for_horizon(
+                    horizon=request.horizon,
+                    nominal_bus_speed_kmh=self._settings.nominal_bus_speed_kmh,
+                ),
+            )
+            if sum(segment.distance_meters for segment in selected_segments) <= 0:
+                return AdviceWithheld(
+                    mode=request.mode,
+                    horizon=request.horizon,
+                    route_id=request.route_id,
+                    route_version_id=request.route_version_id,
+                    route_direction_id=request.route_direction_id,
+                    reason_code="noAdviceForSelectedHorizon",
+                    computed_at=request.observed_at,
+                )
+
+            return _build_advice_success(
+                request=request,
+                segments=selected_segments,
+                position=AdvicePosition(
+                    lat=projection.lat,
+                    lng=projection.lng,
+                    source="liveLocation",
+                    distance_from_route_meters=projection.distance_from_route_meters,
+                ),
+            )
+
         selected_segments = _segments_from_direction_start(
             segments,
-            max_distance_meters=(
-                window_distance_meters(
-                    nominal_bus_speed_kmh=self._settings.nominal_bus_speed_kmh,
-                    window_minutes=15,
-                )
-                if request.horizon is AdviceHorizon.upcoming
-                else None
+            max_distance_meters=_max_distance_for_horizon(
+                horizon=request.horizon,
+                nominal_bus_speed_kmh=self._settings.nominal_bus_speed_kmh,
             ),
         )
         if sum(segment.distance_meters for segment in selected_segments) <= 0:
@@ -94,23 +168,10 @@ class AdvisoryService:
                 computed_at=request.observed_at,
             )
 
-        sun_positions = [
-            sun_position(lat=segment.midpoint_lat, lng=segment.midpoint_lng, dt=request.observed_at)
-            for segment in selected_segments
-        ]
-        summary = summarize_advice_horizon(segments=selected_segments, sun_positions=sun_positions)
-        start_lng, start_lat = segments[0].coordinates[0]
-        return AdviceSuccess(
-            mode=AdviceMode.preview,
-            horizon=request.horizon,
-            route_id=request.route_id,
-            route_version_id=request.route_version_id,
-            route_direction_id=request.route_direction_id,
-            direct_sun_exposure=summary.direct_sun_exposure,
-            recommended_seat_area=recommended_seat_area(summary.direct_sun_exposure),
-            sun_condition=summary.sun_condition,
-            computed_at=request.observed_at,
-            position=AdvicePosition(lat=start_lat, lng=start_lng, source="directionStart"),
+        return _build_advice_success(
+            request=request,
+            segments=selected_segments,
+            position=_direction_start_position(segments),
         )
 
     async def build_onboard_advisory(self, request: OnboardAdvisoryRequest) -> OnboardAdvisoryResponse:
@@ -204,3 +265,41 @@ def _segments_from_direction_start(
             )
         )
     return selected
+
+
+def _max_distance_for_horizon(*, horizon: AdviceHorizon, nominal_bus_speed_kmh: float) -> float | None:
+    if horizon is AdviceHorizon.upcoming:
+        return window_distance_meters(
+            nominal_bus_speed_kmh=nominal_bus_speed_kmh,
+            window_minutes=15,
+        )
+    return None
+
+
+def _direction_start_position(segments: list[RouteSegment]) -> AdvicePosition:
+    start_lng, start_lat = segments[0].coordinates[0]
+    return AdvicePosition(lat=start_lat, lng=start_lng, source="directionStart")
+
+
+def _build_advice_success(
+    *,
+    request: AdviceComputationRequest,
+    segments: list[SegmentForAdvisory],
+    position: AdvicePosition,
+) -> AdviceSuccess:
+    sun_positions = [
+        sun_position(lat=segment.midpoint_lat, lng=segment.midpoint_lng, dt=request.observed_at) for segment in segments
+    ]
+    summary = summarize_advice_horizon(segments=segments, sun_positions=sun_positions)
+    return AdviceSuccess(
+        mode=request.mode,
+        horizon=request.horizon,
+        route_id=request.route_id,
+        route_version_id=request.route_version_id,
+        route_direction_id=request.route_direction_id,
+        direct_sun_exposure=summary.direct_sun_exposure,
+        recommended_seat_area=recommended_seat_area(summary.direct_sun_exposure),
+        sun_condition=summary.sun_condition,
+        computed_at=request.observed_at,
+        position=position,
+    )

@@ -5,6 +5,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class PublicError(BaseModel):
     code: str
@@ -44,3 +48,14 @@ async def validation_exception_handler(_request: Request, _exc: RequestValidatio
         code="validationFailed",
         message="Request validation failed.",
     )
+
+
+async def unexpected_public_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    if request.url.path.startswith("/v1"):
+        logger.exception("Unhandled public API exception for %s", request.url.path, exc_info=exc)
+        return public_error_response(
+            status_code=503,
+            code="serviceUnavailable",
+            message="Service temporarily unavailable.",
+        )
+    raise exc

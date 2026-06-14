@@ -9,68 +9,14 @@ from app.routes.advisory import get_advisory_service
 from app.routes.nearby import get_route_service
 from app.routes.route_candidates import get_route_service as get_route_candidate_service
 from app.schemas import (
-    CandidateRouteDirection,
+    AdviceMode,
     DirectionChoice,
-    ExposureDirection,
-    ExposureWindow,
-    LightweightRouteDirection,
-    OnboardAdvisoryResponse,
-    ProjectedRoutePosition,
     RouteCandidate,
     RouteSegment,
-    RouteSummary,
 )
 
 
 class FakeRouteService:
-    async def list_current_routes(self, *, query, lat, lng, radius_meters, limit):
-        self.last_list_request = {
-            "query": query,
-            "lat": lat,
-            "lng": lng,
-            "radius_meters": radius_meters,
-            "limit": limit,
-        }
-        return [
-            RouteSummary(
-                route_id="00000000-0000-0000-0000-000000000001",
-                route_code="110",
-                route_name="TICEN - Lagoa",
-                route_version_id="00000000-0000-0000-0000-000000000002",
-                distance_meters=18.5,
-                directions=[
-                    LightweightRouteDirection(
-                        route_direction_id="00000000-0000-0000-0000-000000000003",
-                        sequence=1,
-                        name="Centro > Lagoa",
-                        departure_labels=["Saida TICEN"],
-                    )
-                ],
-            )
-        ]
-
-    async def load_current_route(self, route_id):
-        if str(route_id) == "00000000-0000-0000-0000-000000000001":
-            return RouteSummary(
-                route_id=route_id,
-                route_code="110",
-                route_name="TICEN - Lagoa",
-                route_version_id="00000000-0000-0000-0000-000000000002",
-                directions=[
-                    LightweightRouteDirection(
-                        route_direction_id="00000000-0000-0000-0000-000000000003",
-                        sequence=1,
-                        name="Centro > Lagoa",
-                        departure_labels=["Saida TICEN"],
-                    )
-                ],
-            )
-        return None
-
-    async def load_current_route_directions(self, route_id):
-        route = await self.load_current_route(route_id)
-        return route.directions if route else []
-
     async def load_current_route_version_id(self, route_id):
         if str(route_id) == "00000000-0000-0000-0000-000000000001":
             return UUID("00000000-0000-0000-0000-000000000002")
@@ -110,21 +56,6 @@ class FakeRouteService:
             "00000000-0000-0000-0000-000000000004",
         }
 
-    async def find_nearby_route_directions(self, *, lat, lng, radius_meters, limit):
-        return [
-            CandidateRouteDirection(
-                route_id="00000000-0000-0000-0000-000000000001",
-                route_code="110",
-                route_name="TICEN - Lagoa",
-                route_version_id="00000000-0000-0000-0000-000000000002",
-                route_direction_id="00000000-0000-0000-0000-000000000003",
-                route_direction_sequence=1,
-                route_direction_name="Centro > Lagoa",
-                departure_labels=["Saida TICEN", "Saida Lagoa"],
-                distance_meters=18.5,
-            )
-        ]
-
     async def search_route_candidates(self, *, query, limit):
         self.last_search_route_candidates_request = {"query": query, "limit": limit}
         return [
@@ -157,30 +88,27 @@ class FakeRouteService:
 
 
 class FakeAdvisoryService:
-    async def build_onboard_advisory(self, request):
-        return OnboardAdvisoryResponse(
-            status="advisory",
-            route_version_id=request.route_version_id,
-            route_direction_id=request.route_direction_id,
-            requested_at=request.datetime,
-            projected_position=ProjectedRoutePosition(
-                segment_id="00000000-0000-0000-0000-000000000004",
-                segment_sequence=1,
-                lat=request.lat,
-                lng=request.lng,
-                distance_from_route_meters=10,
-                cumulative_distance_meters=100,
-            ),
-            upcoming_window=ExposureWindow(
-                total_distance_meters=500,
-                dominant_direction=ExposureDirection.left,
-                breakdown_meters={ExposureDirection.left: 500},
-            ),
-            remaining_route=None,
-        )
-
     async def build_advice(self, request):
         self.last_advice_request = request
+        if request.mode is AdviceMode.onboard:
+            return {
+                "status": "advice",
+                "mode": "onboard",
+                "horizon": request.horizon,
+                "route_id": request.route_id,
+                "route_version_id": request.route_version_id,
+                "route_direction_id": request.route_direction_id,
+                "direct_sun_exposure": "right",
+                "recommended_seat_area": "left",
+                "sun_condition": "daylight",
+                "computed_at": request.observed_at,
+                "position": {
+                    "lat": -27.6,
+                    "lng": -48.495,
+                    "source": "liveLocation",
+                    "distance_from_route_meters": 8,
+                },
+            }
         return {
             "status": "advice",
             "mode": "preview",
@@ -220,46 +148,15 @@ async def test_health_live():
 
 
 @pytest.mark.asyncio
-async def test_routes_endpoint_lists_current_routes_with_default_limit():
-    app = create_app()
-    fake_service = FakeRouteService()
-
-    async def override_route_service():
-        return fake_service
-
-    app.dependency_overrides[get_route_service] = override_route_service
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/v1/routes", params={"query": "110"})
-
-    assert response.status_code == 200
-    assert response.json()["routes"][0]["route_code"] == "110"
-    assert response.json()["routes"][0]["directions"][0]["departure_labels"] == ["Saida TICEN"]
-    assert fake_service.last_list_request["limit"] == 10
-
-
-@pytest.mark.asyncio
-async def test_routes_endpoint_rejects_partial_location_filter():
+@pytest.mark.parametrize("path", ["/v1/routes", "/v1/routes/00000000-0000-0000-0000-000000000001"])
+async def test_legacy_route_summary_endpoints_are_removed(path):
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/v1/routes", params={"lat": -27.6})
-
-    assert response.status_code == 422
-    assert response.json()["detail"] == "lat, lng, and radius_meters must be provided together"
-
-
-@pytest.mark.asyncio
-async def test_route_detail_endpoint_returns_404_for_non_current_route():
-    app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/v1/routes/00000000-0000-0000-0000-000000000099")
+        response = await client.get(path)
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "current route not found"
 
 
 @pytest.mark.asyncio
@@ -360,18 +257,14 @@ async def test_direction_choices_validation_errors_use_standard_envelope(route_i
 
 
 @pytest.mark.asyncio
-async def test_nearby_route_directions_endpoint_uses_route_service():
+async def test_legacy_nearby_route_directions_endpoint_is_removed():
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/v1/nearby-route-directions", params={"lat": -27.6, "lng": -48.5})
 
-    assert response.status_code == 200
-    candidate = response.json()["candidates"][0]
-    assert candidate["route_direction_name"] == "Centro > Lagoa"
-    assert candidate["departure_labels"] == ["Saida TICEN", "Saida Lagoa"]
-    assert "candidate_direction_label" not in candidate
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -703,12 +596,19 @@ async def test_openapi_exposes_browser_geometry_endpoint_without_legacy_segments
 
     assert response.status_code == 200
     paths = response.json()["paths"]
-    assert "/v1/routes/{route_id}/directions/{route_direction_id}/geometry" in paths
+    assert set(paths) == {
+        "/health/live",
+        "/v1/route-candidates/nearby",
+        "/v1/route-candidates/search",
+        "/v1/routes/{route_id}/directions",
+        "/v1/routes/{route_id}/directions/{route_direction_id}/geometry",
+        "/v1/advice",
+    }
     assert "/v1/route-directions/{route_direction_id}/segments" not in paths
 
 
 @pytest.mark.asyncio
-async def test_onboard_advisory_endpoint_uses_advisory_service():
+async def test_legacy_onboard_advisory_endpoint_is_removed():
     app = create_app()
     app.dependency_overrides[get_advisory_service] = fake_advisory_service
 
@@ -724,9 +624,7 @@ async def test_onboard_advisory_endpoint_uses_advisory_service():
             },
         )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "advisory"
-    assert response.json()["upcoming_window"]["dominant_direction"] == "left"
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -776,6 +674,96 @@ async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case()
 
 
 @pytest.mark.asyncio
+async def test_advice_endpoint_accepts_onboard_contract_with_location():
+    app = create_app()
+    fake_service = FakeAdvisoryService()
+
+    async def override_advisory_service():
+        return fake_service
+
+    app.dependency_overrides[get_advisory_service] = override_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "fallbackToPreview": True,
+                "location": {
+                    "lat": -27.6,
+                    "lng": -48.495,
+                    "accuracyMeters": 42,
+                    "observedAt": "2026-01-15T14:59:58+00:00",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "advice",
+        "mode": "onboard",
+        "horizon": "upcoming",
+        "routeId": "00000000-0000-0000-0000-000000000001",
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
+        "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+        "directSunExposure": "right",
+        "recommendedSeatArea": "left",
+        "sunCondition": "daylight",
+        "computedAt": "2026-01-15T15:00:00Z",
+        "position": {
+            "lat": -27.6,
+            "lng": -48.495,
+            "source": "liveLocation",
+            "distanceFromRouteMeters": 8.0,
+        },
+    }
+    assert fake_service.last_advice_request.mode is AdviceMode.onboard
+    assert fake_service.last_advice_request.location is not None
+    assert fake_service.last_advice_request.location.accuracy_meters == 42
+    assert fake_service.last_advice_request.fallback_to_preview is True
+
+
+@pytest.mark.asyncio
+async def test_advice_endpoint_accepts_onboard_high_accuracy_and_old_location_timestamp():
+    app = create_app()
+    fake_service = FakeAdvisoryService()
+
+    async def override_advisory_service():
+        return fake_service
+
+    app.dependency_overrides[get_advisory_service] = override_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "location": {
+                    "lat": -27.6,
+                    "lng": -48.495,
+                    "accuracyMeters": 500,
+                    "observedAt": "2026-01-15T14:00:00+00:00",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["computedAt"] == "2026-01-15T15:00:00Z"
+    assert fake_service.last_advice_request.location is not None
+    assert fake_service.last_advice_request.location.accuracy_meters == 500
+
+
+@pytest.mark.asyncio
 async def test_advice_endpoint_rejects_preview_request_with_location():
     app = create_app()
     app.dependency_overrides[get_advisory_service] = fake_advisory_service
@@ -804,7 +792,7 @@ async def test_advice_endpoint_rejects_preview_request_with_location():
 
 
 @pytest.mark.asyncio
-async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exists():
+async def test_advice_endpoint_rejects_onboard_request_without_location():
     app = create_app()
     app.dependency_overrides[get_advisory_service] = fake_advisory_service
 
@@ -828,6 +816,51 @@ async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exist
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "location_update",
+    [
+        {"lat": -91},
+        {"lng": -181},
+        {"accuracyMeters": -1},
+        {"observedAt": "2026-01-15T14:59:58"},
+    ],
+)
+async def test_advice_endpoint_rejects_invalid_onboard_location_shape(location_update):
+    app = create_app()
+    app.dependency_overrides[get_advisory_service] = fake_advisory_service
+    location = {
+        "lat": -27.6,
+        "lng": -48.495,
+        "accuracyMeters": 42,
+        "observedAt": "2026-01-15T14:59:58+00:00",
+    }
+    location.update(location_update)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "location": location,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "payload_update",
     [
         {"routeId": "not-a-uuid"},
@@ -835,6 +868,7 @@ async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exist
         {"routeDirectionId": "not-a-uuid"},
         {"observedAt": "2026-01-15T15:00:00"},
         {"mode": "unsupported"},
+        {"mode": "unavailable"},
         {"horizon": "all"},
     ],
 )
@@ -862,3 +896,71 @@ async def test_advice_endpoint_validation_errors_use_standard_envelope(payload_u
         }
     }
     assert "detail" not in response.json()
+
+
+class ExplodingRouteCandidateService:
+    async def search_route_candidates(self, *, query, limit):
+        raise RuntimeError("boom")
+
+
+class ExplodingAdvisoryService:
+    async def build_advice(self, request):
+        raise RuntimeError("boom")
+
+
+@pytest.mark.asyncio
+async def test_route_candidate_unexpected_failures_use_service_unavailable_envelope():
+    app = create_app()
+
+    async def exploding_service():
+        return ExplodingRouteCandidateService()
+
+    app.dependency_overrides[get_route_candidate_service] = exploding_service
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/v1/route-candidates/search", params={"query": "330"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "code": "serviceUnavailable",
+            "message": "Service temporarily unavailable.",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_advice_unexpected_failures_use_service_unavailable_envelope():
+    app = create_app()
+
+    async def exploding_service():
+        return ExplodingAdvisoryService()
+
+    app.dependency_overrides[get_advisory_service] = exploding_service
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "preview",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "code": "serviceUnavailable",
+            "message": "Service temporarily unavailable.",
+        }
+    }

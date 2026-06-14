@@ -86,29 +86,18 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
   - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
   - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
   - Route candidates do not include selectable direction identifiers.
-- `GET /v1/routes`
-  - Lists current route summaries.
-  - Query parameters:
-    - `query`: optional route code/name search.
-    - `lat`, `lng`, `radius_meters`: optional nearby route filter.
-    - `limit`: optional result limit, defaults to `10`, max `100`.
-- `GET /v1/routes/{route_id}`
-  - Returns one current route summary, including lightweight directions.
 - `GET /v1/routes/{route_id}/directions`
   - Returns lightweight current directions for one route.
-- `GET /v1/route-directions/{route_direction_id}/segments?route_version_id={route_version_id}`
+- `GET /v1/routes/{route_id}/directions/{route_direction_id}/geometry`
   - Returns ordered current segment geometry for one selected route direction.
-- `GET /v1/nearby-route-directions`
-  - Returns nearby selectable route directions for advisory selection.
-  - Query parameters:
-    - `lat`, `lng`: required passenger location.
-    - `radius_meters`: optional search radius, defaults to `100`.
-    - `limit`: optional result limit, defaults to `10`, max `100`.
 - `POST /v1/advice`
   - Computes browser-contract Advice for a selected current route direction.
-  - Issue #7 supports `mode: "preview"` with `horizon: "upcoming"` or `horizon: "remainingRoute"`.
-  - Preview requests use top-level `observedAt` and UUID-shaped `routeId`, `routeVersionId`, and `routeDirectionId`.
+  - Supports `mode: "preview"` and `mode: "onboard"` with `horizon: "upcoming"` or `horizon: "remainingRoute"`.
+  - Advice requests use top-level `observedAt` and UUID-shaped `routeId`, `routeVersionId`, and `routeDirectionId`.
   - Preview mode anchors at the selected direction start and must not include `location`.
+  - Onboard mode requires `location`, anchors advice at the projected route position, and reports `distanceFromRouteMeters`.
+  - The backend validates location shape but does not reject stale or low-accuracy locations in v1.
+  - Off-route onboard requests return `reasonCode: "locationOffRoute"` unless `fallbackToPreview` is true, in which case the backend returns preview advice from the direction start while preserving the requested horizon.
   - Example preview request:
     ```json
     {
@@ -140,6 +129,45 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
       }
     }
     ```
+  - Example onboard request:
+    ```json
+    {
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "mode": "onboard",
+      "horizon": "upcoming",
+      "observedAt": "2026-01-15T15:00:00+00:00",
+      "fallbackToPreview": true,
+      "location": {
+        "lat": -27.6,
+        "lng": -48.495,
+        "accuracyMeters": 42,
+        "observedAt": "2026-01-15T14:59:58+00:00"
+      }
+    }
+    ```
+  - Example successful onboard response:
+    ```json
+    {
+      "status": "advice",
+      "mode": "onboard",
+      "horizon": "upcoming",
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "directSunExposure": "right",
+      "recommendedSeatArea": "left",
+      "sunCondition": "daylight",
+      "computedAt": "2026-01-15T15:00:00Z",
+      "position": {
+        "lat": -27.6,
+        "lng": -48.495,
+        "source": "liveLocation",
+        "distanceFromRouteMeters": 8.0
+      }
+    }
+    ```
   - Valid selections with no materialized geometry return withheld Advice with `reasonCode: "missingRouteGeometry"`.
   - Valid selections whose selected horizon has no computable distance return withheld Advice with `reasonCode: "noAdviceForSelectedHorizon"`.
   - Example withheld response:
@@ -155,4 +183,22 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
       "computedAt": "2026-01-15T15:00:00Z"
     }
     ```
-- `POST /v1/onboard-advisories`
+
+## Public Errors
+
+All non-2xx responses from `/v1` use the standard envelope:
+
+```json
+{
+  "error": {
+    "code": "validationFailed",
+    "message": "Request validation failed."
+  }
+}
+```
+
+- Validation failures return `422 validationFailed`.
+- Missing current routes return `404 routeNotFound`.
+- Stale route versions return `409 routeVersionStale`.
+- Missing current directions return `404 routeDirectionNotFound`.
+- Unexpected `/v1` service-side failures return `503 serviceUnavailable`.

@@ -35,6 +35,7 @@ The new public language is `Route Candidate`, `Direction Choice`, `Route Geometr
 - Replace public advice with:
   - `POST /v1/advice`
   - Request supports `mode`, `horizon`, top-level `observedAt`, optional `location`, and `fallbackToPreview`.
+  - Request `mode` accepts only `onboard` or `preview`; `unavailable` is not a client request mode.
   - Support all four `mode` + `horizon` combinations.
   - `horizon` selects exactly one computation window; do not return both upcoming and remaining-route windows in one advice response.
   - `mode: "onboard"` requires `location`; missing or invalid location returns `422 validationFailed`.
@@ -42,6 +43,9 @@ The new public language is `Route Candidate`, `Direction Choice`, `Route Geometr
   - Use top-level `observedAt` for sun computation and response `computedAt`.
   - Validate location shape only in the backend: lat/lng ranges, timezone-aware `observedAt`, and non-negative optional `accuracyMeters`. Frontend owns freshness and accuracy gating for v1.
   - Preview anchors at the first coordinate of the first ordered route segment.
+  - Onboard anchors at the projected route position derived from `location`; `position.source` remains `liveLocation` and `distanceFromRouteMeters` reports the raw-location distance from the selected direction.
+  - Onboard `horizon: "upcoming"` starts at the projected route position and uses the same internal 15-minute distance window as preview upcoming.
+  - Onboard `horizon: "remainingRoute"` starts at the projected route position and excludes already-traveled route distance.
   - If onboard projection is off-route and `fallbackToPreview: true`, return preview advice from the direction start while preserving the requested `horizon`.
   - If onboard projection is off-route and fallback is false, return withheld with `reasonCode: "locationOffRoute"`.
   - `preview` requests ignore `fallbackToPreview`.
