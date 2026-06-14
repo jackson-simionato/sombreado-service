@@ -153,7 +153,7 @@ class AdviceRequest(BrowserSchema):
     route_id: str
     route_version_id: str
     route_direction_id: str
-    mode: AdviceMode
+    mode: Literal[AdviceMode.onboard, AdviceMode.preview]
     horizon: AdviceHorizon
     observed_at: datetime
     location: AdviceLocation | None = None
@@ -171,7 +171,7 @@ class AdviceComputationRequest(BaseModel):
     route_id: UUID
     route_version_id: UUID
     route_direction_id: UUID
-    mode: AdviceMode
+    mode: Literal[AdviceMode.onboard, AdviceMode.preview]
     horizon: AdviceHorizon
     observed_at: datetime
     location: AdviceLocation | None = None

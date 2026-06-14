@@ -106,9 +106,12 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
     - `limit`: optional result limit, defaults to `10`, max `100`.
 - `POST /v1/advice`
   - Computes browser-contract Advice for a selected current route direction.
-  - Issue #7 supports `mode: "preview"` with `horizon: "upcoming"` or `horizon: "remainingRoute"`.
-  - Preview requests use top-level `observedAt` and UUID-shaped `routeId`, `routeVersionId`, and `routeDirectionId`.
+  - Supports `mode: "preview"` and `mode: "onboard"` with `horizon: "upcoming"` or `horizon: "remainingRoute"`.
+  - Advice requests use top-level `observedAt` and UUID-shaped `routeId`, `routeVersionId`, and `routeDirectionId`.
   - Preview mode anchors at the selected direction start and must not include `location`.
+  - Onboard mode requires `location`, anchors advice at the projected route position, and reports `distanceFromRouteMeters`.
+  - The backend validates location shape but does not reject stale or low-accuracy locations in v1.
+  - Off-route onboard requests return `reasonCode: "locationOffRoute"` unless `fallbackToPreview` is true, in which case the backend returns preview advice from the direction start while preserving the requested horizon.
   - Example preview request:
     ```json
     {
@@ -137,6 +140,45 @@ Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or 
         "lat": -27.6,
         "lng": -48.5,
         "source": "directionStart"
+      }
+    }
+    ```
+  - Example onboard request:
+    ```json
+    {
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "mode": "onboard",
+      "horizon": "upcoming",
+      "observedAt": "2026-01-15T15:00:00+00:00",
+      "fallbackToPreview": true,
+      "location": {
+        "lat": -27.6,
+        "lng": -48.495,
+        "accuracyMeters": 42,
+        "observedAt": "2026-01-15T14:59:58+00:00"
+      }
+    }
+    ```
+  - Example successful onboard response:
+    ```json
+    {
+      "status": "advice",
+      "mode": "onboard",
+      "horizon": "upcoming",
+      "routeId": "00000000-0000-0000-0000-000000000001",
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
+      "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+      "directSunExposure": "right",
+      "recommendedSeatArea": "left",
+      "sunCondition": "daylight",
+      "computedAt": "2026-01-15T15:00:00Z",
+      "position": {
+        "lat": -27.6,
+        "lng": -48.495,
+        "source": "liveLocation",
+        "distanceFromRouteMeters": 8.0
       }
     }
     ```

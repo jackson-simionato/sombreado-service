@@ -40,13 +40,13 @@ async def advice(
     request: AdviceRequest,
     advisory_service: Annotated[AdvisoryService, Depends(get_advisory_service)],
 ) -> AdviceResponse:
-    if request.mode is AdviceMode.onboard:
+    if request.mode is AdviceMode.onboard and request.location is None:
         raise PublicApiError(
             status_code=422,
             code="validationFailed",
-            message="Onboard advice is not implemented yet.",
+            message="Onboard advice requires location.",
         )
-    if request.location is not None:
+    if request.mode is AdviceMode.preview and request.location is not None:
         raise PublicApiError(
             status_code=422,
             code="validationFailed",

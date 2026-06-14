@@ -9,6 +9,7 @@ from app.routes.advisory import get_advisory_service
 from app.routes.nearby import get_route_service
 from app.routes.route_candidates import get_route_service as get_route_candidate_service
 from app.schemas import (
+    AdviceMode,
     CandidateRouteDirection,
     DirectionChoice,
     ExposureDirection,
@@ -181,6 +182,25 @@ class FakeAdvisoryService:
 
     async def build_advice(self, request):
         self.last_advice_request = request
+        if request.mode is AdviceMode.onboard:
+            return {
+                "status": "advice",
+                "mode": "onboard",
+                "horizon": request.horizon,
+                "route_id": request.route_id,
+                "route_version_id": request.route_version_id,
+                "route_direction_id": request.route_direction_id,
+                "direct_sun_exposure": "right",
+                "recommended_seat_area": "left",
+                "sun_condition": "daylight",
+                "computed_at": request.observed_at,
+                "position": {
+                    "lat": -27.6,
+                    "lng": -48.495,
+                    "source": "liveLocation",
+                    "distance_from_route_meters": 8,
+                },
+            }
         return {
             "status": "advice",
             "mode": "preview",
@@ -776,6 +796,96 @@ async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case()
 
 
 @pytest.mark.asyncio
+async def test_advice_endpoint_accepts_onboard_contract_with_location():
+    app = create_app()
+    fake_service = FakeAdvisoryService()
+
+    async def override_advisory_service():
+        return fake_service
+
+    app.dependency_overrides[get_advisory_service] = override_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "fallbackToPreview": True,
+                "location": {
+                    "lat": -27.6,
+                    "lng": -48.495,
+                    "accuracyMeters": 42,
+                    "observedAt": "2026-01-15T14:59:58+00:00",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "advice",
+        "mode": "onboard",
+        "horizon": "upcoming",
+        "routeId": "00000000-0000-0000-0000-000000000001",
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
+        "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+        "directSunExposure": "right",
+        "recommendedSeatArea": "left",
+        "sunCondition": "daylight",
+        "computedAt": "2026-01-15T15:00:00Z",
+        "position": {
+            "lat": -27.6,
+            "lng": -48.495,
+            "source": "liveLocation",
+            "distanceFromRouteMeters": 8.0,
+        },
+    }
+    assert fake_service.last_advice_request.mode is AdviceMode.onboard
+    assert fake_service.last_advice_request.location is not None
+    assert fake_service.last_advice_request.location.accuracy_meters == 42
+    assert fake_service.last_advice_request.fallback_to_preview is True
+
+
+@pytest.mark.asyncio
+async def test_advice_endpoint_accepts_onboard_high_accuracy_and_old_location_timestamp():
+    app = create_app()
+    fake_service = FakeAdvisoryService()
+
+    async def override_advisory_service():
+        return fake_service
+
+    app.dependency_overrides[get_advisory_service] = override_advisory_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "location": {
+                    "lat": -27.6,
+                    "lng": -48.495,
+                    "accuracyMeters": 500,
+                    "observedAt": "2026-01-15T14:00:00+00:00",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["computedAt"] == "2026-01-15T15:00:00Z"
+    assert fake_service.last_advice_request.location is not None
+    assert fake_service.last_advice_request.location.accuracy_meters == 500
+
+
+@pytest.mark.asyncio
 async def test_advice_endpoint_rejects_preview_request_with_location():
     app = create_app()
     app.dependency_overrides[get_advisory_service] = fake_advisory_service
@@ -804,7 +914,7 @@ async def test_advice_endpoint_rejects_preview_request_with_location():
 
 
 @pytest.mark.asyncio
-async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exists():
+async def test_advice_endpoint_rejects_onboard_request_without_location():
     app = create_app()
     app.dependency_overrides[get_advisory_service] = fake_advisory_service
 
@@ -828,6 +938,51 @@ async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exist
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "location_update",
+    [
+        {"lat": -91},
+        {"lng": -181},
+        {"accuracyMeters": -1},
+        {"observedAt": "2026-01-15T14:59:58"},
+    ],
+)
+async def test_advice_endpoint_rejects_invalid_onboard_location_shape(location_update):
+    app = create_app()
+    app.dependency_overrides[get_advisory_service] = fake_advisory_service
+    location = {
+        "lat": -27.6,
+        "lng": -48.495,
+        "accuracyMeters": 42,
+        "observedAt": "2026-01-15T14:59:58+00:00",
+    }
+    location.update(location_update)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": "00000000-0000-0000-0000-000000000001",
+                "routeVersionId": "00000000-0000-0000-0000-000000000002",
+                "routeDirectionId": "00000000-0000-0000-0000-000000000003",
+                "mode": "onboard",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00+00:00",
+                "location": location,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {
+            "code": "validationFailed",
+            "message": "Request validation failed.",
+        }
+    }
+    assert "detail" not in response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "payload_update",
     [
         {"routeId": "not-a-uuid"},
@@ -835,6 +990,7 @@ async def test_advice_endpoint_rejects_onboard_mode_until_onboard_contract_exist
         {"routeDirectionId": "not-a-uuid"},
         {"observedAt": "2026-01-15T15:00:00"},
         {"mode": "unsupported"},
+        {"mode": "unavailable"},
         {"horizon": "all"},
     ],
 )

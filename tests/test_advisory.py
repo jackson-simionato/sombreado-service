@@ -8,6 +8,7 @@ from app.errors import PublicApiError
 from app.schemas import (
     AdviceComputationRequest,
     AdviceHorizon,
+    AdviceLocation,
     AdviceMode,
     ExposureDirection,
     OnboardAdvisoryRequest,
@@ -101,6 +102,30 @@ def _advice_request(horizon=AdviceHorizon.remaining_route) -> AdviceComputationR
         mode=AdviceMode.preview,
         horizon=horizon,
         observed_at=datetime(2026, 1, 15, 15, tzinfo=UTC),
+    )
+
+
+def _onboard_advice_request(
+    *,
+    lat=-27.6,
+    lng=-48.495,
+    horizon=AdviceHorizon.upcoming,
+    fallback_to_preview=False,
+) -> AdviceComputationRequest:
+    return AdviceComputationRequest(
+        route_id=ROUTE_ID,
+        route_version_id=ROUTE_VERSION_ID,
+        route_direction_id=ROUTE_DIRECTION_ID,
+        mode=AdviceMode.onboard,
+        horizon=horizon,
+        observed_at=datetime(2026, 1, 15, 15, tzinfo=UTC),
+        location=AdviceLocation(
+            lat=lat,
+            lng=lng,
+            accuracy_meters=42,
+            observed_at=datetime(2026, 1, 15, 14, 59, 58, tzinfo=UTC),
+        ),
+        fallback_to_preview=fallback_to_preview,
     )
 
 
@@ -294,3 +319,87 @@ async def test_preview_advice_returns_success_for_night_overhead_and_low_sun(
     assert response.status == "advice"
     assert response.direct_sun_exposure is expected_exposure
     assert response.sun_condition == expected_condition
+
+
+async def test_onboard_advice_projects_live_location_and_returns_requested_horizon(monkeypatch):
+    service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
+    monkeypatch.setattr(
+        "app.services.advisory.sun_position",
+        lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 45, "elevation": 35})(),
+    )
+
+    response = await service.build_advice(_onboard_advice_request(horizon=AdviceHorizon.remaining_route))
+
+    assert response.status == "advice"
+    assert response.mode is AdviceMode.onboard
+    assert response.horizon is AdviceHorizon.remaining_route
+    assert response.direct_sun_exposure is ExposureDirection.left
+    assert response.computed_at == datetime(2026, 1, 15, 15, tzinfo=UTC)
+    assert response.position is not None
+    assert response.position.source == "liveLocation"
+    assert response.position.lat == -27.6
+    assert response.position.lng == -48.495
+    assert response.position.distance_from_route_meters < 1
+
+
+async def test_onboard_advice_withholds_when_location_is_off_route_without_fallback():
+    service = AdvisoryService(
+        route_service=PreviewRouteService(),
+        settings=Settings(off_route_threshold_meters=75),
+    )
+
+    response = await service.build_advice(_onboard_advice_request(lat=-27.61, lng=-48.495, fallback_to_preview=False))
+
+    assert response.status == "withheld"
+    assert response.mode is AdviceMode.onboard
+    assert response.horizon is AdviceHorizon.upcoming
+    assert response.reason_code == "locationOffRoute"
+    assert response.computed_at == datetime(2026, 1, 15, 15, tzinfo=UTC)
+
+
+async def test_onboard_advice_off_route_fallback_returns_preview_with_requested_horizon(monkeypatch):
+    service = AdvisoryService(
+        route_service=PreviewRouteService(),
+        settings=Settings(off_route_threshold_meters=75),
+    )
+    monkeypatch.setattr(
+        "app.services.advisory.sun_position",
+        lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 45, "elevation": 35})(),
+    )
+
+    response = await service.build_advice(
+        _onboard_advice_request(lat=-27.61, lng=-48.495, horizon=AdviceHorizon.upcoming, fallback_to_preview=True)
+    )
+
+    assert response.status == "advice"
+    assert response.mode is AdviceMode.preview
+    assert response.horizon is AdviceHorizon.upcoming
+    assert response.position is not None
+    assert response.position.source == "directionStart"
+
+
+async def test_onboard_advice_off_route_fallback_preserves_preview_withheld_for_zero_distance():
+    service = AdvisoryService(
+        route_service=PreviewRouteService(
+            segments=[
+                RouteSegment(
+                    id="00000000-0000-0000-0000-000000000004",
+                    sequence=1,
+                    coordinates=[(-48.5, -27.6), (-48.49, -27.6)],
+                    bearing_degrees=90,
+                    distance_meters=0,
+                    cumulative_distance_meters=0,
+                )
+            ]
+        ),
+        settings=Settings(off_route_threshold_meters=75),
+    )
+
+    response = await service.build_advice(
+        _onboard_advice_request(lat=-27.61, lng=-48.495, horizon=AdviceHorizon.upcoming, fallback_to_preview=True)
+    )
+
+    assert response.status == "withheld"
+    assert response.mode is AdviceMode.preview
+    assert response.horizon is AdviceHorizon.upcoming
+    assert response.reason_code == "noAdviceForSelectedHorizon"
