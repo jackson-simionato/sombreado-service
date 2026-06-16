@@ -32,6 +32,18 @@ See `docs/engineering-standards.md` for branch, commit, PR, and agent workflow s
 
 The project targets Python 3.14 through `.python-version` and `requires-python = ">=3.14"`.
 
+## Configuration
+
+Settings are loaded from environment variables and `.env`.
+
+Local development allows `http://localhost:3000`, `http://127.0.0.1:3000`,
+and `http://localhost:5173` by default for CORS. Override deployed or custom
+browser origins with a JSON list:
+
+```bash
+CORS_ORIGINS='["https://app.example.com"]'
+```
+
 ## Database Access
 
 `sombreado-service` consumes the scraper-owned PostGIS schema as a separate read-only database user. Do not use the scraper ingestion or migration owner role for this service.

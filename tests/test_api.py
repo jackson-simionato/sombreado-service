@@ -148,6 +148,24 @@ async def test_health_live():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["http://localhost:3000", "http://127.0.0.1:3000"])
+async def test_local_frontend_origins_are_allowed_by_cors(origin):
+    app = create_app()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.options(
+            "/v1/route-candidates/search",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/v1/routes", "/v1/routes/00000000-0000-0000-0000-000000000001"])
 async def test_legacy_route_summary_endpoints_are_removed(path):
     app = create_app()
