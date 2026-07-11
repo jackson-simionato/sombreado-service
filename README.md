@@ -5,27 +5,25 @@ Read-only Python backend for onboard sun-side advisories from the Consorcio Feni
 ## Local Setup
 
 ```bash
-uv sync
-uv run uvicorn app.main:app --reload
+make install
+make start
 ```
 
-Run tests:
+Useful development commands:
+
+| Command | Equivalent `uv` command | Purpose |
+| --- | --- | --- |
+| `make start` | `uv run uvicorn app.main:app --reload` | Start the local development server with reload enabled. |
+| `make test` | `uv run python -m pytest -q` | Run the test suite. |
+| `make format` | `uv run ruff format .` | Format Python files. |
+| `make lint` | `uv run ruff check .` | Run lint checks. |
+| `make check` | Ruff format check, Ruff lint, and pytest | Run all non-mutating completion checks. |
+| `make pre-commit` | `uv run pre-commit install` | Install the pre-commit hooks. |
+
+The underlying commands remain available directly. Before completing a change, run:
 
 ```bash
-uv run python -m pytest -q
-```
-
-Run formatting and linting before completing a change:
-
-```bash
-uv run ruff format .
-uv run ruff check .
-```
-
-Install pre-commit hooks:
-
-```bash
-uv run pre-commit install
+make check
 ```
 
 See `docs/engineering-standards.md` for branch, commit, PR, and agent workflow standards.
