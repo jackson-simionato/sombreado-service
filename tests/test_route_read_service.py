@@ -5,7 +5,8 @@ import pytest
 from sqlalchemy.sql.elements import TextClause
 
 from app.models import ServiceDirectionRecord
-from app.services.routes import RouteReadService
+from app.schemas import RouteSegment
+from app.services.routes import RouteReadService, flatten_route_polyline
 
 
 class MappingRow:
@@ -14,7 +15,8 @@ class MappingRow:
 
 
 class FakeResult(list):
-    pass
+    def first(self):
+        return self[0] if self else None
 
 
 class FakeSession:
@@ -233,7 +235,8 @@ async def test_search_route_candidates_maps_route_only_candidates_without_locati
     assert candidates[0].route_code == "330"
     assert candidates[0].route_name == "TILAG - Centro"
     assert candidates[0].direction_hints == ["TILAG", "Centro"]
-    assert "distance_meters" not in candidates[0].model_dump()
+    assert candidates[0].distance_meters is None
+    assert "distance_meters" not in candidates[0].model_dump(exclude_none=True)
 
     statement, params = session.calls[0]
     sql = _assert_core_statement(statement)
@@ -300,6 +303,78 @@ async def test_search_route_candidates_allows_current_routes_without_direction_h
     assert candidates[0].direction_hints == []
 
 
+async def test_find_nearby_route_candidates_maps_distance_sorted_route_only_candidates():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                    route_code="330",
+                    route_name="TILAG - Centro",
+                    direction_hints=["TILAG", "Centro", "TILAG"],
+                    distance_meters=42.5,
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    candidates = await service.find_nearby_route_candidates(lat=-27.6, lng=-48.5, radius_meters=1200, limit=5)
+
+    assert len(candidates) == 1
+    assert candidates[0].route_id == UUID("00000000-0000-0000-0000-000000000001")
+    assert candidates[0].route_version_id == UUID("00000000-0000-0000-0000-000000000002")
+    assert candidates[0].route_code == "330"
+    assert candidates[0].route_name == "TILAG - Centro"
+    assert candidates[0].direction_hints == ["TILAG", "Centro"]
+    assert candidates[0].distance_meters == 42.5
+    assert "route_direction_id" not in candidates[0].model_dump()
+
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "ST_DWithin" in sql
+    assert "ST_Distance" in sql
+    assert "JOIN route_segments" in sql
+    assert "route_segments.route_version_id = route_versions.id" in sql
+    assert "LEFT OUTER JOIN route_segments" not in sql
+    assert "service_directions.confidence IN" in sql
+    assert "service_directions.route_direction_id IS NOT NULL" in sql
+    assert "route_directions.sequence ASC" in sql
+    assert "service_directions.sequence ASC" in sql
+    assert "GROUP BY" in sql
+    assert "ORDER BY" in sql
+    assert params == {"lat": -27.6, "lng": -48.5, "radius_meters": 1200, "limit": 5}
+
+
+async def test_find_nearby_route_candidates_can_return_route_hints_from_non_nearby_directions():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_id=UUID("00000000-0000-0000-0000-000000000011"),
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000012"),
+                    route_code="331",
+                    route_name="TILAG - UFSC",
+                    direction_hints=["TILAG", "UFSC"],
+                    distance_meters=120.0,
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    candidates = await service.find_nearby_route_candidates(lat=-27.6, lng=-48.5, radius_meters=1200, limit=5)
+
+    assert candidates[0].direction_hints == ["TILAG", "UFSC"]
+    statement, _params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "nearby_routes" in sql
+    assert "route_candidate_hints" in sql
+
+
 async def test_load_current_route_returns_none_when_not_found():
     session = FakeSession(FakeResult([]))
     service = RouteReadService(session)
@@ -309,6 +384,37 @@ async def test_load_current_route_returns_none_when_not_found():
     assert route is None
     sql = _assert_core_statement(session.calls[0][0])
     assert "routes.id = %(route_id)s" in sql
+
+
+async def test_load_current_route_version_id_returns_current_version_without_requiring_directions():
+    session = FakeSession(
+        FakeResult(
+            [
+                SimpleNamespace(
+                    route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    route_version_id = await service.load_current_route_version_id(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert route_version_id == UUID("00000000-0000-0000-0000-000000000002")
+    sql = _assert_core_statement(session.calls[0][0])
+    assert "routes.id = %(route_id)s" in sql
+    assert "routes.is_current = true" in sql
+    assert "route_versions.is_current = true" in sql
+    assert "route_directions" not in sql
+
+
+async def test_load_current_route_version_id_returns_none_for_missing_current_route():
+    session = FakeSession(FakeResult([]))
+    service = RouteReadService(session)
+
+    route_version_id = await service.load_current_route_version_id(UUID("00000000-0000-0000-0000-000000000001"))
+
+    assert route_version_id is None
 
 
 async def test_load_current_route_directions_maps_labels():
@@ -370,6 +476,99 @@ async def test_load_current_route_directions_uses_public_departure_label_semanti
     assert "service_directions.sequence ASC" in sql
 
 
+async def test_load_direction_choices_maps_rows_for_current_version():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    sequence=1,
+                    name="Centro > Lagoa",
+                    departure_labels=["TICEN", "Centro", "TICEN"],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_direction_choices(route_version_id=UUID("00000000-0000-0000-0000-000000000002"))
+
+    assert directions[0].route_direction_id == UUID("00000000-0000-0000-0000-000000000003")
+    assert directions[0].sequence == 1
+    assert directions[0].name == "Centro > Lagoa"
+    assert directions[0].departure_labels == ["TICEN", "Centro"]
+
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "route_directions.route_version_id = %(route_version_id)s" in sql
+    assert "service_directions.confidence IN" in sql
+    assert "service_directions.route_direction_id IS NOT NULL" in sql
+    assert "route_directions.sequence ASC" in sql
+    assert "service_directions.sequence ASC" in sql
+    assert params["route_version_id"] == UUID("00000000-0000-0000-0000-000000000002")
+
+
+async def test_load_direction_choices_keeps_direction_when_public_labels_are_empty():
+    session = FakeSession(
+        FakeResult(
+            [
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    sequence=1,
+                    name="Centro > Lagoa",
+                    departure_labels=[],
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    directions = await service.load_direction_choices(route_version_id=UUID("00000000-0000-0000-0000-000000000002"))
+
+    assert len(directions) == 1
+    assert directions[0].departure_labels == []
+
+
+async def test_route_direction_belongs_to_version_returns_true_for_matching_direction():
+    session = FakeSession(
+        FakeResult(
+            [
+                SimpleNamespace(
+                    id=UUID("00000000-0000-0000-0000-000000000003"),
+                )
+            ]
+        )
+    )
+    service = RouteReadService(session)
+
+    belongs = await service.route_direction_belongs_to_version(
+        route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+        route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
+    )
+
+    assert belongs is True
+    statement, params = session.calls[0]
+    sql = _assert_core_statement(statement)
+    assert "route_directions.route_version_id = %(route_version_id)s" in sql
+    assert "route_directions.id = %(route_direction_id)s" in sql
+    assert params == {
+        "route_version_id": UUID("00000000-0000-0000-0000-000000000002"),
+        "route_direction_id": UUID("00000000-0000-0000-0000-000000000003"),
+    }
+
+
+async def test_route_direction_belongs_to_version_returns_false_for_missing_direction():
+    session = FakeSession(FakeResult([]))
+    service = RouteReadService(session)
+
+    belongs = await service.route_direction_belongs_to_version(
+        route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+        route_direction_id=UUID("00000000-0000-0000-0000-000000000099"),
+    )
+
+    assert belongs is False
+
+
 async def test_load_current_route_directions_keeps_direction_when_public_labels_are_empty():
     session = FakeSession(
         FakeResult(
@@ -394,6 +593,56 @@ async def test_load_current_route_directions_keeps_direction_when_public_labels_
 
     assert len(directions) == 1
     assert directions[0].departure_labels == []
+
+
+def test_flatten_route_polyline_converts_lng_lat_segments_to_lat_lng_points():
+    segments = [
+        RouteSegment(
+            id=UUID("00000000-0000-0000-0000-000000000004"),
+            sequence=1,
+            coordinates=[(-48.5, -27.6), (-48.49, -27.6)],
+            bearing_degrees=90,
+            distance_meters=986,
+            cumulative_distance_meters=986,
+        )
+    ]
+
+    polyline = flatten_route_polyline(segments)
+
+    assert [point.model_dump() for point in polyline] == [
+        {"lat": -27.6, "lng": -48.5},
+        {"lat": -27.6, "lng": -48.49},
+    ]
+
+
+def test_flatten_route_polyline_removes_only_adjacent_duplicate_join_points():
+    segments = [
+        RouteSegment(
+            id=UUID("00000000-0000-0000-0000-000000000004"),
+            sequence=1,
+            coordinates=[(-48.5, -27.6), (-48.49, -27.6), (-48.48, -27.61)],
+            bearing_degrees=90,
+            distance_meters=986,
+            cumulative_distance_meters=986,
+        ),
+        RouteSegment(
+            id=UUID("00000000-0000-0000-0000-000000000005"),
+            sequence=2,
+            coordinates=[(-48.48, -27.61), (-48.5, -27.6)],
+            bearing_degrees=270,
+            distance_meters=986,
+            cumulative_distance_meters=1972,
+        ),
+    ]
+
+    polyline = flatten_route_polyline(segments)
+
+    assert [point.model_dump() for point in polyline] == [
+        {"lat": -27.6, "lng": -48.5},
+        {"lat": -27.6, "lng": -48.49},
+        {"lat": -27.61, "lng": -48.48},
+        {"lat": -27.6, "lng": -48.5},
+    ]
 
 
 async def test_load_current_route_segments_maps_ordered_linestring_rows():

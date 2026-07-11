@@ -3,7 +3,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.errors import validation_exception_handler
+from app.errors import (
+    PublicApiError,
+    public_api_error_handler,
+    unexpected_public_error_handler,
+    validation_exception_handler,
+)
 from app.logging import configure_logging
 from app.routes import advisory, health, nearby, route_candidates
 
@@ -13,7 +18,9 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
 
     app = FastAPI(title="sombreado-service")
+    app.add_exception_handler(PublicApiError, public_api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(Exception, unexpected_public_error_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
