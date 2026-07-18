@@ -60,6 +60,10 @@ _Avoid_: Direction choice, direction identifier, route direction name
 A selectable current route direction for a selected route candidate. Its usability comes from current route-direction data, not from departure-label or geometry availability.
 _Avoid_: Segment geometry, service timetable
 
+**Route Direction Kind**:
+An optional semantic classification of a Direction Choice as `ida` or `volta`, supplied by the scraper only for an unambiguous route-direction pair.
+_Avoid_: Parsed direction name, inferred complementary direction, departure label
+
 **Departure Label**:
 A passenger-facing label from scraper service direction data that helps distinguish how a route direction is boarded, announced, or recognized.
 _Avoid_: Public service direction resource, timetable
@@ -111,6 +115,8 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - A **Route Search** may return a **Route Candidate** with no **Direction Hints**.
 - A **Nearby Route Filter** returns only **Route Candidates** close enough to the passenger to have meaningful distance.
 - **Direction Choices** are discovered after a passenger selects a **Route Candidate**.
+- A **Direction Choice** may have a **Route Direction Kind**.
+- A missing **Route Direction Kind** does not make a **Direction Choice** unusable.
 - A **Direction Choice** may have zero, one, or many **Departure Labels**.
 - Public **Departure Labels** use high or medium **Direction Match Confidence**.
 - **Departure Labels** do not determine whether a **Direction Choice** is usable.

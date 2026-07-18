@@ -29,7 +29,9 @@ The new public language is `Route Candidate`, `Direction Choice`, `Route Geometr
 - Replace direction and geometry public surfaces with:
   - `GET /v1/routes/{routeId}/directions?routeVersionId=...`
   - `GET /v1/routes/{routeId}/directions/{routeDirectionId}/geometry?routeVersionId=...`
-  - Direction choices return authoritative `routeDirectionId`, `sequence`, `name`, and `departureLabels`.
+  - Direction choices return authoritative `routeDirectionId`, `sequence`, `name`, nullable `directionKind`, and `departureLabels`.
+  - `directionKind` is always present and is `"ida"`, `"volta"`, or `null`. Map it directly from the current scraper-owned `route_directions.direction_kind`; do not infer it from `name` or `departureLabels`.
+  - A null `directionKind` is expected for singleton, ambiguous, unlabeled, and unchanged pre-classification Route Directions. It does not affect Direction Choice usability or ordering.
   - Geometry returns `{ routeId, routeVersionId, routeDirectionId, polyline }`, flattening ordered segment LineStrings into `{lat,lng}` points and removing adjacent duplicate joins.
   - Valid current route/version/direction rows with no materialized segment geometry return `200` and `polyline: []`; invalid route/version/direction identifiers still use the public error envelope.
 - Replace public advice with:
