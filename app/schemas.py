@@ -75,6 +75,7 @@ class DirectionChoice(BrowserSchema):
     route_direction_id: UUID
     sequence: int
     name: str
+    direction_kind: Literal["ida", "volta"] | None
     departure_labels: list[str] = Field(default_factory=list)
 
 

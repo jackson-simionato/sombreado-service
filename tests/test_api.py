@@ -31,8 +31,16 @@ class FakeRouteService:
                     route_direction_id="00000000-0000-0000-0000-000000000003",
                     sequence=1,
                     name="Centro > Lagoa",
+                    direction_kind="ida",
                     departure_labels=["Saida TICEN"],
-                )
+                ),
+                DirectionChoice(
+                    route_direction_id="00000000-0000-0000-0000-000000000004",
+                    sequence=2,
+                    name="Lagoa > Centro",
+                    direction_kind=None,
+                    departure_labels=["Saida Lagoa"],
+                ),
             ]
         return []
 
@@ -195,8 +203,16 @@ async def test_direction_choices_validate_route_version_and_return_camel_case_re
                 "routeDirectionId": "00000000-0000-0000-0000-000000000003",
                 "sequence": 1,
                 "name": "Centro > Lagoa",
+                "directionKind": "ida",
                 "departureLabels": ["Saida TICEN"],
-            }
+            },
+            {
+                "routeDirectionId": "00000000-0000-0000-0000-000000000004",
+                "sequence": 2,
+                "name": "Lagoa > Centro",
+                "directionKind": None,
+                "departureLabels": ["Saida Lagoa"],
+            },
         ]
     }
 
@@ -623,6 +639,33 @@ async def test_openapi_exposes_browser_geometry_endpoint_without_legacy_segments
         "/v1/advice",
     }
     assert "/v1/route-directions/{route_direction_id}/segments" not in paths
+
+
+@pytest.mark.asyncio
+async def test_openapi_requires_nullable_direction_kind_with_supported_values():
+    app = create_app()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/openapi.json")
+
+    assert response.status_code == 200
+    direction_choice = response.json()["components"]["schemas"]["DirectionChoice"]
+    assert "directionKind" in direction_choice["required"]
+    assert direction_choice["properties"]["directionKind"]["anyOf"] == [
+        {"type": "string", "enum": ["ida", "volta"]},
+        {"type": "null"},
+    ]
+
+
+def test_direction_choice_rejects_unsupported_direction_kind():
+    with pytest.raises(ValueError, match="direction_kind"):
+        DirectionChoice(
+            route_direction_id="00000000-0000-0000-0000-000000000003",
+            sequence=1,
+            name="Centro > Lagoa",
+            direction_kind="circular",
+            departure_labels=[],
+        )
 
 
 @pytest.mark.asyncio

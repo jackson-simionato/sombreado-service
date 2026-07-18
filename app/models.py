@@ -33,6 +33,7 @@ class RouteDirectionRecord(Base):
     route_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("route_versions.id"))
     name: Mapped[str] = mapped_column(Text)
     sequence: Mapped[int] = mapped_column(Integer)
+    direction_kind: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
 
 class RouteSegmentRecord(Base):
