@@ -649,12 +649,18 @@ async def test_openapi_requires_nullable_direction_kind_with_supported_values():
         response = await client.get("/openapi.json")
 
     assert response.status_code == 200
-    direction_choice = response.json()["components"]["schemas"]["DirectionChoice"]
+    schemas = response.json()["components"]["schemas"]
+    direction_choice = schemas["DirectionChoice"]
     assert "directionKind" in direction_choice["required"]
     assert direction_choice["properties"]["directionKind"]["anyOf"] == [
-        {"type": "string", "enum": ["ida", "volta"]},
+        {"$ref": "#/components/schemas/RouteDirectionKind"},
         {"type": "null"},
     ]
+    assert schemas["RouteDirectionKind"] == {
+        "type": "string",
+        "enum": ["ida", "volta"],
+        "title": "RouteDirectionKind",
+    }
 
 
 def test_direction_choice_rejects_unsupported_direction_kind():
