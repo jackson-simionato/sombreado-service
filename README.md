@@ -134,8 +134,8 @@ meaning from them.
     ```
 - `GET /v1/routes/{routeId}/directions?routeVersionId={routeVersionId}`
   - Returns selectable current Direction Choices for one selected Route Candidate.
-  - `routeVersionId` is required so saved or stale client selections can be rejected explicitly.
-  - Returns `{ "directions": [...] }` with `routeDirectionId`, `sequence`, `name`, and `departureLabels`.
+  - When omitted, `routeVersionId` resolves to the route's latest current version. When supplied, stale saved selections are rejected explicitly.
+  - Returns `{ "routeVersionId": "...", "directions": [...] }`, with the resolved current version and each choice's `routeDirectionId`, `sequence`, `name`, and `departureLabels`.
   - `departureLabels` follow the same high/medium confidence linked service-direction semantics as Direction Hints; empty `departureLabels` is valid.
   - Missing current routes return `404 routeNotFound`.
   - Stale route versions return `409 routeVersionStale`.
@@ -143,6 +143,7 @@ meaning from them.
   - Example response:
     ```json
     {
+      "routeVersionId": "00000000-0000-0000-0000-000000000002",
       "directions": [
         {
           "routeDirectionId": "00000000-0000-0000-0000-000000000003",
