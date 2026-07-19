@@ -487,18 +487,32 @@ async def test_load_direction_choices_maps_rows_for_current_version():
         FakeResult(
             [
                 MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000004"),
+                    sequence=2,
+                    name="Lagoa > Centro",
+                    direction_kind="volta",
+                    departure_labels=["Lagoa"],
+                ),
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000006"),
+                    sequence=4,
+                    name="Circular",
+                    direction_kind=None,
+                    departure_labels=[],
+                ),
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000005"),
+                    sequence=3,
+                    name="Centro > Lagoa via UFSC",
+                    direction_kind="ida",
+                    departure_labels=["TICEN", "UFSC"],
+                ),
+                MappingRow(
                     route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
                     sequence=1,
                     name="Centro > Lagoa",
                     direction_kind="ida",
                     departure_labels=["TICEN", "Centro", "TICEN"],
-                ),
-                MappingRow(
-                    route_direction_id=UUID("00000000-0000-0000-0000-000000000004"),
-                    sequence=2,
-                    name="Lagoa > Centro",
-                    direction_kind=None,
-                    departure_labels=["Lagoa"],
                 ),
             ]
         )
@@ -512,11 +526,12 @@ async def test_load_direction_choices_maps_rows_for_current_version():
     assert directions[0].name == "Centro > Lagoa"
     assert directions[0].direction_kind == "ida"
     assert directions[0].departure_labels == ["TICEN", "Centro"]
-    assert directions[1].route_direction_id == UUID("00000000-0000-0000-0000-000000000004")
-    assert directions[1].sequence == 2
-    assert directions[1].name == "Lagoa > Centro"
-    assert directions[1].direction_kind is None
-    assert directions[1].departure_labels == ["Lagoa"]
+    assert [(direction.direction_kind, direction.sequence) for direction in directions] == [
+        ("ida", 1),
+        ("ida", 3),
+        ("volta", 2),
+        (None, 4),
+    ]
 
     statement, params = session.calls[0]
     sql = _assert_core_statement(statement)

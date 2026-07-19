@@ -119,7 +119,7 @@ class RouteReadService:
 
     async def load_direction_choices(self, *, route_version_id: UUID) -> list[DirectionChoice]:
         rows = await self._session.execute(_direction_choices_statement(), {"route_version_id": route_version_id})
-        return [
+        directions = [
             DirectionChoice(
                 route_direction_id=values["route_direction_id"],
                 sequence=values["sequence"],
@@ -129,6 +129,9 @@ class RouteReadService:
             )
             for values in (row._mapping for row in rows)
         ]
+        direction_kind_order = {"ida": 0, "volta": 1, None: 2}
+        directions.sort(key=lambda direction: (direction_kind_order[direction.direction_kind], direction.sequence))
+        return directions
 
     async def route_direction_belongs_to_version(
         self,

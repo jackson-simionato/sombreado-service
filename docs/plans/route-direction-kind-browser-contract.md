@@ -4,7 +4,7 @@
 
 Expose the scraper-owned Route Direction Kind through the existing Direction Choices endpoint so Sombreado Floripa can show a stable `Ida` or `Volta` cue during direction selection without parsing raw KML names.
 
-This extends the existing browser contract; it does not add an endpoint or change Direction Choice eligibility, ordering, labels, or geometry behavior.
+This extends the existing browser contract; it does not add an endpoint or change Direction Choice eligibility, labels, or geometry behavior.
 
 ## Public Contract
 
@@ -46,7 +46,7 @@ Example:
 - Return exactly `"ida"`, `"volta"`, or `null`; never omit the field.
 - Do not rescan `name`, infer a complementary kind, or derive the kind from Departure Labels.
 - Null is valid Current Route Data. It includes singleton, ambiguous, and unlabeled directions, plus unchanged Route Versions created before classification existed.
-- Null does not remove, disable, or reorder a Direction Choice.
+- Order Direction Choices by semantic kind: `ida`, then `volta`, then null. Preserve ascending `sequence` within each group.
 - Preserve `routeDirectionId`, `sequence`, `name`, and `departureLabels` unchanged.
 
 ## Backend Slice
@@ -66,4 +66,5 @@ Deploy the backend contract before deploying a frontend validator that requires 
 
 - A classified current pair returns one `ida` and one `volta` value.
 - A valid unclassified direction returns `directionKind: null` and remains selectable.
-- Direction ordering, raw names, Departure Labels, stale-version errors, and empty-direction behavior remain unchanged.
+- Direction ordering is `ida`, then `volta`, then null, with ascending `sequence` within each group.
+- Raw names, Departure Labels, stale-version errors, and empty-direction behavior remain unchanged.
