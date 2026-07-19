@@ -98,6 +98,7 @@ class RoutesResponse(BaseModel):
 
 
 class DirectionChoicesResponse(BrowserSchema):
+    route_version_id: UUID
     directions: list[DirectionChoice]
 
 

@@ -186,6 +186,19 @@ async def test_legacy_route_summary_endpoints_are_removed(path):
 
 
 @pytest.mark.asyncio
+async def test_direction_choices_default_to_latest_route_version():
+    app = create_app()
+    app.dependency_overrides[get_route_service] = fake_route_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/routes/00000000-0000-0000-0000-000000000001/directions")
+
+    assert response.status_code == 200
+    assert response.json()["routeVersionId"] == "00000000-0000-0000-0000-000000000002"
+    assert response.json()["directions"][0]["routeDirectionId"] == "00000000-0000-0000-0000-000000000003"
+
+
+@pytest.mark.asyncio
 async def test_direction_choices_validate_route_version_and_return_camel_case_response():
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
@@ -198,6 +211,7 @@ async def test_direction_choices_validate_route_version_and_return_camel_case_re
 
     assert response.status_code == 200
     assert response.json() == {
+        "routeVersionId": "00000000-0000-0000-0000-000000000002",
         "directions": [
             {
                 "routeDirectionId": "00000000-0000-0000-0000-000000000003",
@@ -213,7 +227,7 @@ async def test_direction_choices_validate_route_version_and_return_camel_case_re
                 "directionKind": None,
                 "departureLabels": ["Saida Lagoa"],
             },
-        ]
+        ],
     }
 
 
@@ -229,18 +243,25 @@ async def test_direction_choices_return_empty_list_for_current_route_without_dir
         )
 
     assert response.status_code == 200
-    assert response.json() == {"directions": []}
+    assert response.json() == {"routeVersionId": "00000000-0000-0000-0000-000000000020", "directions": []}
 
 
 @pytest.mark.asyncio
-async def test_direction_choices_return_route_not_found_error():
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+    ],
+)
+async def test_direction_choices_return_route_not_found_error(params):
     app = create_app()
     app.dependency_overrides[get_route_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
             "/v1/routes/00000000-0000-0000-0000-000000000099/directions",
-            params={"routeVersionId": "00000000-0000-0000-0000-000000000002"},
+            params=params,
         )
 
     assert response.status_code == 404
@@ -270,7 +291,7 @@ async def test_direction_choices_return_stale_version_error():
     [
         ("not-a-uuid", {"routeVersionId": "00000000-0000-0000-0000-000000000002"}),
         ("00000000-0000-0000-0000-000000000001", {"routeVersionId": "not-a-uuid"}),
-        ("00000000-0000-0000-0000-000000000001", {}),
+        ("00000000-0000-0000-0000-000000000099", {"routeVersionId": "not-a-uuid"}),
     ],
 )
 async def test_direction_choices_validation_errors_use_standard_envelope(route_id, params):
