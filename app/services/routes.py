@@ -124,6 +124,7 @@ class RouteReadService:
                 route_direction_id=values["route_direction_id"],
                 sequence=values["sequence"],
                 name=values["name"],
+                direction_kind=values["direction_kind"],
                 departure_labels=_dedupe_preserving_order(values["departure_labels"] or []),
             )
             for values in (row._mapping for row in rows)
@@ -499,6 +500,7 @@ def _direction_choices_statement():
             RouteDirectionRecord.id.label("route_direction_id"),
             RouteDirectionRecord.sequence,
             RouteDirectionRecord.name,
+            RouteDirectionRecord.direction_kind,
             direction_labels.c.departure_labels,
         )
         .select_from(RouteDirectionRecord)

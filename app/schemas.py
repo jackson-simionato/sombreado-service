@@ -42,6 +42,11 @@ class AdviceHorizon(StrEnum):
     remaining_route = "remainingRoute"
 
 
+class RouteDirectionKind(StrEnum):
+    ida = "ida"
+    volta = "volta"
+
+
 class SunPosition(BaseModel):
     azimuth: float = Field(ge=0, le=360)
     elevation: float
@@ -75,6 +80,7 @@ class DirectionChoice(BrowserSchema):
     route_direction_id: UUID
     sequence: int
     name: str
+    direction_kind: RouteDirectionKind | None
     departure_labels: list[str] = Field(default_factory=list)
 
 

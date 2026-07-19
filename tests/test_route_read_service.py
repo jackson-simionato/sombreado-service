@@ -4,7 +4,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy.sql.elements import TextClause
 
-from app.models import ServiceDirectionRecord
+from app.models import RouteDirectionRecord, ServiceDirectionRecord
 from app.schemas import RouteSegment
 from app.services.routes import RouteReadService, flatten_route_polyline
 
@@ -52,6 +52,12 @@ def test_service_direction_record_maps_public_label_columns():
 
     assert sequence_column.name == "sequence"
     assert confidence_column.name == "confidence"
+
+
+def test_route_direction_record_maps_direction_kind_column():
+    direction_kind_column = RouteDirectionRecord.direction_kind.property.columns[0]
+
+    assert direction_kind_column.name == "direction_kind"
 
 
 async def test_find_nearby_route_directions_maps_read_contract_rows():
@@ -484,8 +490,16 @@ async def test_load_direction_choices_maps_rows_for_current_version():
                     route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
                     sequence=1,
                     name="Centro > Lagoa",
+                    direction_kind="ida",
                     departure_labels=["TICEN", "Centro", "TICEN"],
-                )
+                ),
+                MappingRow(
+                    route_direction_id=UUID("00000000-0000-0000-0000-000000000004"),
+                    sequence=2,
+                    name="Lagoa > Centro",
+                    direction_kind=None,
+                    departure_labels=["Lagoa"],
+                ),
             ]
         )
     )
@@ -496,10 +510,17 @@ async def test_load_direction_choices_maps_rows_for_current_version():
     assert directions[0].route_direction_id == UUID("00000000-0000-0000-0000-000000000003")
     assert directions[0].sequence == 1
     assert directions[0].name == "Centro > Lagoa"
+    assert directions[0].direction_kind == "ida"
     assert directions[0].departure_labels == ["TICEN", "Centro"]
+    assert directions[1].route_direction_id == UUID("00000000-0000-0000-0000-000000000004")
+    assert directions[1].sequence == 2
+    assert directions[1].name == "Lagoa > Centro"
+    assert directions[1].direction_kind is None
+    assert directions[1].departure_labels == ["Lagoa"]
 
     statement, params = session.calls[0]
     sql = _assert_core_statement(statement)
+    assert "route_directions.direction_kind" in sql
     assert "route_directions.route_version_id = %(route_version_id)s" in sql
     assert "service_directions.confidence IN" in sql
     assert "service_directions.route_direction_id IS NOT NULL" in sql
@@ -516,6 +537,7 @@ async def test_load_direction_choices_keeps_direction_when_public_labels_are_emp
                     route_direction_id=UUID("00000000-0000-0000-0000-000000000003"),
                     sequence=1,
                     name="Centro > Lagoa",
+                    direction_kind=None,
                     departure_labels=[],
                 )
             ]
