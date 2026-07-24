@@ -489,7 +489,7 @@ async def test_load_direction_choices_maps_rows_for_current_version():
                 MappingRow(
                     route_direction_id=UUID("00000000-0000-0000-0000-000000000004"),
                     sequence=2,
-                    name="Lagoa > Centro",
+                    name="165-Volta",
                     direction_kind="volta",
                     departure_labels=["Lagoa"],
                 ),
@@ -532,6 +532,9 @@ async def test_load_direction_choices_maps_rows_for_current_version():
         ("volta", 2),
         (None, 4),
     ]
+    volta_direction = directions[2]
+    assert volta_direction.name == "165-Volta"
+    assert volta_direction.direction_kind == "volta"
 
     statement, params = session.calls[0]
     sql = _assert_core_statement(statement)
