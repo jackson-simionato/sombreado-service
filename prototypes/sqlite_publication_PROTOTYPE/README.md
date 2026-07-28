@@ -51,10 +51,10 @@ writes complete evidence; it exits zero only if every gate passes.
 The verdict is intentionally conservative:
 
 - all required gates pass: `core-sqlite-credible`;
-- only distance, boundary/inclusion, nearby ordering, or R*Tree
-  performance/plan evidence fails: `prototype-spatialite-next`;
-- any publication, concurrency, integrity, recovery, or other failure:
-  `fallback-postgis`.
+- only distance, boundary/inclusion, nearby ordering, or an otherwise-clean
+  R*Tree spatial performance/plan check fails: `prototype-spatialite-next`;
+- any publication, concurrency-safety (reader, lifecycle, checkpoint, or
+  backup), integrity, recovery, or other failure: `fallback-postgis`.
 
 For the captured workload the behavioral gate currently fails only spatial
 criteria, while publication, concurrency, and durability pass. The expected

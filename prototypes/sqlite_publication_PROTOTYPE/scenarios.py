@@ -14,11 +14,13 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from itertools import zip_longest
 from pathlib import Path
-from typing import Final, TypeAlias
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from .candidate import CandidateAdapter, CanonicalRows
 from .models import BehaviorSnapshot, LabState, NearbySample, ScenarioResult, Verdict
-from .reference import ReferenceAdapter
+
+if TYPE_CHECKING:
+    from .reference import ReferenceAdapter
 
 PUBLIC_RADII_METERS: Final = (1200.0, 2000.0)
 DISTANCE_TOLERANCE_METERS: Final = 2.0
@@ -763,15 +765,18 @@ def behavior_or_performance_failure_is_spatial_only(
 ) -> bool:
     """Return whether the only failed required gates are spatial limitations.
 
-    Publication, concurrency, durability, integrity, and recovery failures
-    prove that the candidate is not a safe replacement regardless of spatial
-    behavior. The current lab records R*Tree query-plan evidence under the
-    concurrency gate, so a failure there remains a concurrency failure.
+    Publication, concurrency-safety, durability, integrity, and recovery
+    failures prove that the candidate is not a safe replacement regardless of
+    spatial behavior. The concurrency gate records R*Tree query-plan evidence,
+    but an otherwise-clean R*Tree plan miss is a spatial limitation rather
+    than a publication-safety failure.
     """
     results = {result.name: result for result in required_results}
     if set(results) != set(_REQUIRED_SCENARIOS):
         return False
-    if not results["publication"].passed or not results["concurrency"].passed or not results["durability"].passed:
+    if not results["publication"].passed or not results["durability"].passed:
+        return False
+    if not _concurrency_failure_is_rtree_plan_only(results["concurrency"]):
         return False
 
     behavior = results["behavior"]
@@ -793,6 +798,29 @@ def behavior_or_performance_failure_is_spatial_only(
             return False
 
     return any(not result.passed for result in required_results)
+
+
+def _concurrency_failure_is_rtree_plan_only(result: ScenarioResult) -> bool:
+    """Allow only a clean concurrency probe whose R*Tree plan check failed."""
+    if result.passed:
+        return True
+
+    facts = dict(result.facts)
+    return (
+        facts.get("plan_uses_segment_rtree") == "false"
+        and facts.get("plan_uses_active_membership") == "true"
+        and _fact_integer(facts, "busy_errors") == 0
+        and _fact_integer(facts, "reader_errors") == 0
+        and _fact_integer(facts, "unknown_digests") == 0
+        and _fact_integer(facts, "mixed_generation_reads") == 0
+        and _fact_integer(facts, "generation_a_observations") > 0
+        and _fact_integer(facts, "generation_b_observations") > 0
+        and facts.get("reader_clean_shutdown") == "true"
+        and facts.get("reader_forced_termination") == "false"
+        and facts.get("checkpoint", "").split(",", maxsplit=1)[0] == "0"
+        and facts.get("online_backup_exists") == "true"
+        and result.failures == ("nearby query plan did not name segment_rtree",)
+    )
 
 
 def _fact_integer(facts: dict[str, str], key: str) -> int:
