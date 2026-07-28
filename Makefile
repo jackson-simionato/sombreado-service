@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install start test format lint check pre-commit
+.PHONY: help install start test format lint check pre-commit prototype-sqlite-publication
 
 help: ## Show available commands
 	@printf '%s\n' \
@@ -37,3 +37,8 @@ check: ## Run all non-mutating completion checks
 
 pre-commit: ## Install the pre-commit hooks
 	uv run pre-commit install
+
+prototype-sqlite-publication: ## Run the throwaway SQLite/PostGIS decision lab
+	PYTHONPATH="../consorcio-fenix-scraper/src:." \
+	uv run --with "psycopg[binary]>=3.2.0" \
+	python -m prototypes.sqlite_publication_PROTOTYPE.runner
