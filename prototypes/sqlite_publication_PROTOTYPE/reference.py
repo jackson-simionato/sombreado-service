@@ -64,8 +64,14 @@ class ReferenceAdapter:
         finally:
             session_factory.kw["bind"].dispose()
 
-    def capture(self, samples: Iterable[NearbySample]) -> BehaviorSnapshot:
+    def capture(
+        self,
+        samples: Iterable[NearbySample],
+        *,
+        stale_route_codes: Iterable[str] | None = None,
+    ) -> BehaviorSnapshot:
         sample_list = tuple(samples)
+        explicit_stale_route_codes = None if stale_route_codes is None else set(stale_route_codes)
         with self._connect() as connection:
             identities = tuple(
                 tuple(row)
@@ -176,7 +182,7 @@ class ReferenceAdapter:
 
             stale_version_results = self._capture_version_lookups(
                 connection,
-                sampled_route_codes,
+                sampled_route_codes if explicit_stale_route_codes is None else explicit_stale_route_codes,
             )
 
         return BehaviorSnapshot(

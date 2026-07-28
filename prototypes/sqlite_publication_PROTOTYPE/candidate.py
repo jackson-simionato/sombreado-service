@@ -327,9 +327,15 @@ class CandidateAdapter:
                 ).fetchone()[0]
             )
 
-    def capture(self, samples: Iterable[NearbySample]) -> BehaviorSnapshot:
+    def capture(
+        self,
+        samples: Iterable[NearbySample],
+        *,
+        stale_route_codes: Iterable[str] | None = None,
+    ) -> BehaviorSnapshot:
         """Capture the same browser-visible comparison shape as the reference."""
         sample_list = tuple(samples)
+        explicit_stale_route_codes = None if stale_route_codes is None else set(stale_route_codes)
         with self._connect() as connection:
             connection.execute("BEGIN")
             try:
@@ -345,7 +351,7 @@ class CandidateAdapter:
                     sampled_route_codes.update(code for code, _distance in nearby_rows)
                 stale_version_results = self._version_lookups(
                     connection,
-                    sampled_route_codes,
+                    sampled_route_codes if explicit_stale_route_codes is None else explicit_stale_route_codes,
                 )
                 connection.commit()
             except BaseException:

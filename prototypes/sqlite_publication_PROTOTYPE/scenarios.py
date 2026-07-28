@@ -43,9 +43,16 @@ class ScenarioLab:
         initial_reference = self.reference.capture((initial_sample,))
         corpus, targeted_routes = _build_sample_corpus(initial_reference)
         evidence_samples = _boundary_evidence_samples(corpus)
-        reference_with_evidence = self.reference.capture((*corpus, *evidence_samples))
+        stale_route_codes = tuple(row[3] for row in initial_reference.identities)
+        reference_with_evidence = self.reference.capture(
+            (*corpus, *evidence_samples),
+            stale_route_codes=stale_route_codes,
+        )
         reference = _public_snapshot(reference_with_evidence, len(corpus))
-        candidate = self.candidate.capture(corpus)
+        candidate = self.candidate.capture(
+            corpus,
+            stale_route_codes=stale_route_codes,
+        )
 
         failures = _FailureRecorder()
         non_spatial_mismatches = _compare_non_spatial(
@@ -79,6 +86,10 @@ class ScenarioLab:
             ("distance_errors_over_2m", str(spatial.distance_errors_over_2m)),
             ("maximum_distance_error_m", f"{spatial.maximum_distance_error_m:.6f}"),
             ("boundary_band_differences", str(spatial.boundary_band_differences)),
+            (
+                "tolerated_boundary_details_recorded",
+                str(len(spatial.tolerated_boundary_details)),
+            ),
             ("outside_band_differences", str(spatial.outside_band_differences)),
             (
                 "worst_2000_boundary_band_differences",
@@ -108,6 +119,13 @@ class ScenarioLab:
             ("uncategorized_mismatches", "0"),
             ("total_failures", str(total_failures)),
         )
+        facts += tuple(
+            (f"tolerated_boundary_detail.{index}", detail)
+            for index, detail in enumerate(
+                spatial.tolerated_boundary_details,
+                start=1,
+            )
+        )
         result = ScenarioResult(
             name="behavior",
             passed=total_failures == 0,
@@ -133,6 +151,7 @@ class _SpatialCounts:
         self.distance_errors_over_2m = 0
         self.maximum_distance_error_m = 0.0
         self.boundary_band_differences = 0
+        self.tolerated_boundary_details: list[str] = []
         self.outside_band_differences = 0
         self.worst_2000_boundary_details: list[str] = []
         self.worst_2000_outside_details: list[str] = []
@@ -226,14 +245,11 @@ def _public_snapshot(
     sample_count: int,
 ) -> BehaviorSnapshot:
     public_nearby = snapshot.nearby[:sample_count]
-    sampled_codes = {route_code for _sample, rows in public_nearby for route_code, _distance in rows}
-    version_by_code = {row[3]: row[1] for row in snapshot.identities}
-    sampled_versions = {version_by_code[route_code] for route_code in sampled_codes if route_code in version_by_code}
     return BehaviorSnapshot(
         identities=snapshot.identities,
         direction_labels=snapshot.direction_labels,
         geometry=snapshot.geometry,
-        stale_version_results=tuple(row for row in snapshot.stale_version_results if row[0] in sampled_versions),
+        stale_version_results=snapshot.stale_version_results,
         nearby=public_nearby,
     )
 
@@ -244,19 +260,14 @@ def _compare_non_spatial(
     failures: _FailureRecorder,
 ) -> int:
     mismatches = 0
-    common_sampled_codes = _sampled_route_codes(reference) & _sampled_route_codes(candidate)
-    version_by_code = {row[3]: row[1] for row in reference.identities}
-    comparable_versions = {
-        version_by_code[route_code] for route_code in common_sampled_codes if route_code in version_by_code
-    }
     fields = (
         ("identities", reference.identities, candidate.identities),
         ("direction_labels", reference.direction_labels, candidate.direction_labels),
         ("geometry", reference.geometry, candidate.geometry),
         (
             "stale_version_results",
-            tuple(row for row in reference.stale_version_results if row[0] in comparable_versions),
-            tuple(row for row in candidate.stale_version_results if row[0] in comparable_versions),
+            reference.stale_version_results,
+            candidate.stale_version_results,
         ),
     )
     for category, reference_rows, candidate_rows in fields:
@@ -274,10 +285,6 @@ def _compare_non_spatial(
                 f"{category}[{index}] reference={_verbatim(reference_row)} candidate={_verbatim(candidate_row)}"
             )
     return mismatches
-
-
-def _sampled_route_codes(snapshot: BehaviorSnapshot) -> set[str]:
-    return {route_code for _sample, rows in snapshot.nearby for route_code, _distance in rows}
 
 
 def _compare_spatial(
@@ -334,6 +341,14 @@ def _compare_spatial(
             )
             if within_boundary_band:
                 counts.boundary_band_differences += 1
+                if len(counts.tolerated_boundary_details) < _MAX_RECORDED_FAILURES:
+                    counts.tolerated_boundary_details.append(
+                        f"boundary sample={sample_index} route={route_code!r} "
+                        f"radius={sample.radius_meters:.6f} "
+                        f"reference_distance={reference_distance:.6f} "
+                        f"reference_included={route_code in reference_by_code} "
+                        f"candidate_included={route_code in candidate_by_code}"
+                    )
                 if _is_measured_worst_2000_sample(sample_index):
                     counts.worst_2000_boundary_details.append(worst_2000_detail)
                 continue
@@ -376,30 +391,58 @@ def _count_order_mismatches(
     failures: _FailureRecorder,
 ) -> int:
     reference_by_code = dict(reference_rows)
-    candidate_positions = {route_code: index for index, (route_code, _distance) in enumerate(candidate_rows)}
-    reference_codes = [route_code for route_code, _distance in reference_rows if route_code in candidate_positions]
+    candidate_codes = [route_code for route_code, _distance in candidate_rows if route_code in reference_by_code]
+    candidate_positions = {route_code: index for index, route_code in enumerate(candidate_codes)}
+    tie_groups = _reference_tie_groups(reference_rows)
+    group_by_code = {route_code: group_index for group_index, group in enumerate(tie_groups) for route_code in group}
     mismatches = 0
-    for left_index, left_code in enumerate(reference_codes):
-        for right_code in reference_codes[left_index + 1 :]:
-            if candidate_positions[left_code] < candidate_positions[right_code]:
-                continue
-            reference_gap = abs(reference_by_code[left_code] - reference_by_code[right_code])
-            candidate_pair = (right_code, left_code)
-            tie_break_pair = tuple(
-                sorted(
-                    (left_code, right_code),
-                    key=lambda code: (code, route_names.get(code, "")),
-                )
-            )
-            if reference_gap <= DISTANCE_TOLERANCE_METERS and candidate_pair == tie_break_pair:
+    for left_index, left_code in enumerate(candidate_codes):
+        for right_code in candidate_codes[left_index + 1 :]:
+            if group_by_code[left_code] <= group_by_code[right_code]:
                 continue
             mismatches += 1
             failures.add(
-                f"order sample={sample_index} routes={left_code!r},{right_code!r} "
-                f"reference_gap={reference_gap:.6f} "
-                f"candidate_order={candidate_pair!r} tie_break_order={tie_break_pair!r}"
+                f"order cross-band sample={sample_index} "
+                f"candidate_pair={(left_code, right_code)!r} "
+                f"reference_groups={(group_by_code[left_code], group_by_code[right_code])!r}"
             )
+
+    for group_index, group in enumerate(tie_groups):
+        shared_group = [route_code for route_code in group if route_code in candidate_positions]
+        if len(shared_group) < 2:
+            continue
+        candidate_group = tuple(sorted(shared_group, key=candidate_positions.__getitem__))
+        canonical_group = tuple(
+            sorted(
+                shared_group,
+                key=lambda code: (code, route_names.get(code, "")),
+            )
+        )
+        if candidate_group == canonical_group:
+            continue
+        distances = tuple(reference_by_code[route_code] for route_code in group)
+        mismatches += 1
+        failures.add(
+            f"order tie-group sample={sample_index} group={group_index} "
+            f"reference_distances={distances!r} "
+            f"candidate_order={candidate_group!r} canonical_order={canonical_group!r}"
+        )
     return mismatches
+
+
+def _reference_tie_groups(
+    reference_rows: tuple[tuple[str, float], ...],
+) -> tuple[tuple[str, ...], ...]:
+    if not reference_rows:
+        return ()
+    groups: list[list[str]] = [[reference_rows[0][0]]]
+    previous_distance = reference_rows[0][1]
+    for route_code, distance in reference_rows[1:]:
+        if distance - previous_distance > DISTANCE_TOLERANCE_METERS:
+            groups.append([])
+        groups[-1].append(route_code)
+        previous_distance = distance
+    return tuple(tuple(group) for group in groups)
 
 
 def _verbatim(value: object) -> str:
