@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+from .candidate import CandidateAdapter
 from .fixture import load_snapshots
 from .models import LabState
 from .reference import ReferenceAdapter
@@ -49,22 +53,46 @@ def _setup_reference() -> tuple[ReferenceAdapter, int]:
     return reference, len(snapshots)
 
 
-def run_reference_smoke() -> None:
+@contextmanager
+def _candidate_directory(*, keep: bool) -> Iterator[Path]:
+    if keep:
+        path = Path(tempfile.mkdtemp(prefix="sombreado-sqlite-prototype-"))
+        yield path
+        print(f"temporary_directory={path}")
+        return
+    with tempfile.TemporaryDirectory(prefix="sombreado-sqlite-prototype-") as directory:
+        yield Path(directory)
+
+
+def run_reference_smoke(*, keep_temp: bool = False) -> None:
     reference, fixture_count = _setup_reference()
     counts = reference.counts()
-    print(f"fixture_routes={fixture_count}")
-    print(f"reference_routes={counts['routes']}")
-    print(f"reference_versions={counts['route_versions']}")
-    print(f"reference_directions={counts['route_directions']}")
-    print(f"reference_segments={counts['route_segments']}")
-    print(f"worst_workload_location={WORST_WORKLOAD_LOCATION}")
+    canonical_rows = reference.export_generations()
+    with _candidate_directory(keep=keep_temp) as temp_dir:
+        candidate = CandidateAdapter(temp_dir / "candidate.sqlite")
+        candidate.reset()
+        candidate.stage("generation-a", canonical_rows)
+        candidate.validate("generation-a")
+        candidate.publish("generation-a")
+        integrity_rows, foreign_key_rows = candidate.integrity()
+
+        print(f"fixture_routes={fixture_count}")
+        print(f"reference_routes={counts['routes']}")
+        print(f"reference_versions={counts['route_versions']}")
+        print(f"reference_directions={counts['route_directions']}")
+        print(f"reference_segments={counts['route_segments']}")
+        print(f"active_generation={candidate.active_generation()}")
+        print(f"candidate_segments={candidate.active_segment_count()}")
+        print(f"integrity={integrity_rows[0][0]}")
+        print(f"foreign_key_violations={len(foreign_key_rows)}")
+        print(f"worst_workload_location={WORST_WORKLOAD_LOCATION}")
 
 
 def main() -> None:
     args = parse_args()
     state = LabState()
     if args.run == "behavior":
-        run_reference_smoke()
+        run_reference_smoke(keep_temp=args.keep_temp)
     elif args.run != "interactive":
         raise SystemExit("prototype scenario implementation is not loaded yet")
     else:
