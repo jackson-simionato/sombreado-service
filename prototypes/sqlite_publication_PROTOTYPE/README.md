@@ -24,8 +24,7 @@ From the Sombreado Service repository, start the terminal lab with:
 make prototype-sqlite-publication
 ```
 
-The runner also exposes non-interactive scenario keys for subsequent lab
-stages:
+The runner exposes non-interactive scenario modes and an interactive terminal:
 
 ```bash
 python -m prototypes.sqlite_publication_PROTOTYPE.runner --run interactive
@@ -36,5 +35,28 @@ python -m prototypes.sqlite_publication_PROTOTYPE.runner --run durability
 python -m prototypes.sqlite_publication_PROTOTYPE.runner --run all
 ```
 
-Interactive mode currently accepts `[q] quit`. Later prototype tasks add the
-behavior, publication, concurrency, durability, all, and reset actions.
+Interactive mode clears and redraws after each action. Its keys are `[b]`
+behavior, `[p]` publication, `[c]` concurrency, `[d]` durability, `[a]` all,
+`[r]` reset, and `[q]` quit. Reset refuses any target other than the fixed
+verification database and a directory with the exact prototype temporary
+prefix.
+
+Every completed scenario atomically replaces
+`<temporary-directory>/prototype-evidence.json`. The JSON records the fixture
+and reference versions, runtime SQLite version, timestamps, structured facts
+and failures, active generation, SQLite database sizes, query-plan evidence,
+and the provisional verdict. `--run all` always executes all four gates and
+writes complete evidence; it exits zero only if every gate passes.
+
+The verdict is intentionally conservative:
+
+- all required gates pass: `core-sqlite-credible`;
+- only distance, boundary/inclusion, nearby ordering, or R*Tree
+  performance/plan evidence fails: `prototype-spatialite-next`;
+- any publication, concurrency, integrity, recovery, or other failure:
+  `fallback-postgis`.
+
+For the captured workload the behavioral gate currently fails only spatial
+criteria, while publication, concurrency, and durability pass. The expected
+provisional next experiment is therefore `prototype-spatialite-next`, not a
+claim that core SQLite passed the full prototype.

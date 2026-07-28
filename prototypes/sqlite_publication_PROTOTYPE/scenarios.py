@@ -7,15 +7,17 @@ import multiprocessing
 import os
 import queue
 import signal
+import sqlite3
 import statistics
 import time
+from datetime import UTC, datetime
 from hashlib import sha256
 from itertools import zip_longest
 from pathlib import Path
 from typing import Final, TypeAlias
 
 from .candidate import CandidateAdapter, CanonicalRows
-from .models import BehaviorSnapshot, LabState, NearbySample, ScenarioResult
+from .models import BehaviorSnapshot, LabState, NearbySample, ScenarioResult, Verdict
 from .reference import ReferenceAdapter
 
 PUBLIC_RADII_METERS: Final = (1200.0, 2000.0)
@@ -46,6 +48,9 @@ _PROCESS_JOIN_TIMEOUT_SECONDS: Final = 10.0
 _QUEUE_POLL_SECONDS: Final = 0.1
 _READER_IDLE_SECONDS: Final = 0.005
 _KILLED_GENERATION_ID: Final = "generation-killed-writer"
+_FIXTURE_SHA256: Final = "817aa8ee9c3ef0d6a76c9795191097a88de5129247205e1a988d94c7981dc300"
+_REFERENCE_DESCRIPTION: Final = "PostgreSQL 16 / PostGIS 3.4"
+_REQUIRED_SCENARIOS: Final = ("behavior", "publication", "concurrency", "durability")
 
 ReaderRecord: TypeAlias = tuple[str, float, str, str, str]
 
@@ -71,6 +76,28 @@ class ScenarioLab:
         self.generation_b_rows = generation_b_rows
         self.reference_a = reference_a
         self.reference_b = reference_b
+        self._recorded_at: dict[str, str] = {}
+
+    def run_all(self) -> tuple[ScenarioResult, ...]:
+        """Run every required gate, retaining evidence even when one fails."""
+        return (
+            self.run_behavior(),
+            self.run_publication(),
+            self.run_concurrency(),
+            self.run_durability(),
+        )
+
+    def derive_verdict(self) -> Verdict:
+        """Select the next datastore experiment from the completed required gates."""
+        if any(name not in self.state.results for name in _REQUIRED_SCENARIOS):
+            return Verdict.pending
+
+        required_results = tuple(self.state.results[name] for name in _REQUIRED_SCENARIOS)
+        if all(result.passed for result in required_results):
+            return Verdict.core_sqlite_credible
+        if behavior_or_performance_failure_is_spatial_only(required_results):
+            return Verdict.prototype_spatialite
+        return Verdict.fallback_postgis
 
     def run_behavior(self) -> ScenarioResult:
         """Run the deterministic browser-visible parity corpus."""
@@ -171,8 +198,7 @@ class ScenarioLab:
             facts=facts,
             failures=tuple(failures.details),
         )
-        self.state.results["behavior"] = result
-        return result
+        return self._record(result)
 
     def run_publication(self) -> ScenarioResult:
         """Prove failures preserve A and one commit makes the complete B visible."""
@@ -295,8 +321,7 @@ class ScenarioLab:
         )
         self.state.active_generation = published_generation
         self.state.staging_generation = None
-        self.state.results["publication"] = result
-        return result
+        return self._record(result)
 
     def run_concurrency(self) -> ScenarioResult:
         """Probe full-generation publication while a separate process reads snapshots."""
@@ -501,8 +526,7 @@ class ScenarioLab:
             failures=tuple(failures.details),
         )
         self.state.active_generation = self.candidate.active_generation()
-        self.state.results["concurrency"] = result
-        return result
+        return self._record(result)
 
     def run_durability(self) -> ScenarioResult:
         """Kill an uncommitted writer, then verify recovery and a restored backup."""
@@ -664,8 +688,53 @@ class ScenarioLab:
             failures=tuple(failures.details),
         )
         self.state.active_generation = recovered_generation
-        self.state.results["durability"] = result
+        return self._record(result)
+
+    def _record(self, result: ScenarioResult) -> ScenarioResult:
+        self.state.results[result.name] = result
+        self._recorded_at[result.name] = datetime.now(UTC).isoformat()
+        self.state.verdict = self.derive_verdict()
+        self.write_evidence()
         return result
+
+    def write_evidence(self) -> None:
+        """Atomically replace the stable, inspectable evidence document."""
+        if self.state.temp_dir is None:
+            return
+
+        evidence_path = self.state.temp_dir / "prototype-evidence.json"
+        payload = {
+            "fixture_sha256": _FIXTURE_SHA256,
+            "reference": _REFERENCE_DESCRIPTION,
+            "sqlite_version": sqlite3.sqlite_version,
+            "updated_at_utc": datetime.now(UTC).isoformat(),
+            "active_generation": self.state.active_generation,
+            "staging_generation": self.state.staging_generation,
+            "database_sizes_bytes": _database_sizes(self.candidate.database_path.parent),
+            "query_plan_evidence": _query_plan_evidence(self.state.results),
+            "results": {
+                name: {
+                    "passed": result.passed,
+                    "facts": dict(result.facts),
+                    "failures": list(result.failures),
+                    "recorded_at_utc": self._recorded_at.get(name),
+                }
+                for name, result in self.state.results.items()
+            },
+            "verdict": self.state.verdict.value,
+        }
+        temporary_path = evidence_path.with_name(f".{evidence_path.name}.{os.getpid()}.tmp")
+        try:
+            with temporary_path.open("w", encoding="utf-8") as stream:
+                json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, evidence_path)
+            _fsync_directory(evidence_path.parent)
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
 
     def _publication_inputs(
         self,
@@ -687,6 +756,68 @@ class ScenarioLab:
     def _reset_to_generation_a(self, rows: CanonicalRows) -> None:
         self.candidate.reset()
         _publish_generation(self.candidate, "generation-a", rows)
+
+
+def behavior_or_performance_failure_is_spatial_only(
+    required_results: tuple[ScenarioResult, ...],
+) -> bool:
+    """Return whether the only failed required gates are spatial limitations.
+
+    Publication, concurrency, durability, integrity, and recovery failures
+    prove that the candidate is not a safe replacement regardless of spatial
+    behavior. The current lab records R*Tree query-plan evidence under the
+    concurrency gate, so a failure there remains a concurrency failure.
+    """
+    results = {result.name: result for result in required_results}
+    if set(results) != set(_REQUIRED_SCENARIOS):
+        return False
+    if not results["publication"].passed or not results["concurrency"].passed or not results["durability"].passed:
+        return False
+
+    behavior = results["behavior"]
+    behavior_facts = dict(behavior.facts)
+    if not behavior.passed:
+        spatial_failures = sum(
+            _fact_integer(behavior_facts, key)
+            for key in (
+                "distance_errors_over_2m",
+                "outside_band_differences",
+                "order_mismatches",
+            )
+        )
+        if (
+            _fact_integer(behavior_facts, "non_spatial_mismatches") != 0
+            or _fact_integer(behavior_facts, "uncategorized_mismatches") != 0
+            or spatial_failures == 0
+        ):
+            return False
+
+    return any(not result.passed for result in required_results)
+
+
+def _fact_integer(facts: dict[str, str], key: str) -> int:
+    try:
+        return int(facts.get(key, "0"))
+    except ValueError:
+        return -1
+
+
+def _database_sizes(directory: Path) -> dict[str, int]:
+    return {path.name: path.stat().st_size for path in sorted(directory.glob("*.sqlite*")) if path.is_file()}
+
+
+def _query_plan_evidence(results: dict[str, ScenarioResult]) -> dict[str, str]:
+    return {key: value for result in results.values() for key, value in result.facts if "plan" in key}
+
+
+def _fsync_directory(directory: Path) -> None:
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _reader_process(
