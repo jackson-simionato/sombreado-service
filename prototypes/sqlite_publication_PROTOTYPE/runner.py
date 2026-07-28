@@ -12,6 +12,7 @@ from .candidate import CandidateAdapter
 from .fixture import load_snapshots
 from .models import LabState
 from .reference import ReferenceAdapter
+from .scenarios import ScenarioLab
 
 TITLE = "SQLite/PostGIS publication decision lab (PROTOTYPE)"
 QUESTION = (
@@ -64,7 +65,7 @@ def _candidate_directory(*, keep: bool) -> Iterator[Path]:
         yield Path(directory)
 
 
-def run_reference_smoke(*, keep_temp: bool = False) -> None:
+def run_behavior(*, keep_temp: bool = False) -> bool:
     reference, fixture_count = _setup_reference()
     counts = reference.counts()
     canonical_rows = reference.export_generations()
@@ -75,24 +76,42 @@ def run_reference_smoke(*, keep_temp: bool = False) -> None:
         candidate.validate("generation-a")
         candidate.publish("generation-a")
         integrity_rows, foreign_key_rows = candidate.integrity()
+        state = LabState(
+            temp_dir=temp_dir,
+            active_generation=candidate.active_generation(),
+        )
+        result = ScenarioLab(
+            reference,
+            candidate,
+            state=state,
+        ).run_behavior()
 
+        print(f"scenario={result.name}")
+        print(f"passed={str(result.passed).lower()}")
         print(f"fixture_routes={fixture_count}")
         print(f"reference_routes={counts['routes']}")
         print(f"reference_versions={counts['route_versions']}")
         print(f"reference_directions={counts['route_directions']}")
         print(f"reference_segments={counts['route_segments']}")
-        print(f"active_generation={candidate.active_generation()}")
+        print(f"active_generation={state.active_generation}")
         print(f"candidate_segments={candidate.active_segment_count()}")
         print(f"integrity={integrity_rows[0][0]}")
         print(f"foreign_key_violations={len(foreign_key_rows)}")
         print(f"worst_workload_location={WORST_WORKLOAD_LOCATION}")
+        for key, value in result.facts:
+            print(f"fact.{key}={value}")
+        for index, failure in enumerate(result.failures, start=1):
+            print(f"failure.{index}={failure}")
+        return result.passed
 
 
 def main() -> None:
     args = parse_args()
     state = LabState()
     if args.run == "behavior":
-        run_reference_smoke(keep_temp=args.keep_temp)
+        passed = run_behavior(keep_temp=args.keep_temp)
+        if not passed:
+            raise SystemExit(1)
     elif args.run != "interactive":
         raise SystemExit("prototype scenario implementation is not loaded yet")
     else:
