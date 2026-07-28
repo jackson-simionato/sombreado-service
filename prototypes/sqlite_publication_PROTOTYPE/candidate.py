@@ -15,6 +15,14 @@ from .models import BehaviorSnapshot, NearbySample
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
 IntegrityRows: TypeAlias = tuple[tuple[object, ...], ...]
+ReaderWorkload: TypeAlias = tuple[
+    tuple[tuple[str, ...], ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, float], ...],
+    tuple[tuple[str, float], ...],
+]
 
 _TABLES = (
     "routes",
@@ -158,6 +166,31 @@ CREATE INDEX dataset_route_versions_version_idx
 ON dataset_route_versions(route_version_id);
 
 COMMIT;
+"""
+
+_NEARBY_SQL = """
+    SELECT
+        routes.id,
+        routes.code,
+        routes.name,
+        route_segments.start_lat,
+        route_segments.start_lng,
+        route_segments.end_lat,
+        route_segments.end_lng
+    FROM segment_rtree
+    JOIN route_segments
+        ON route_segments.segment_rowid = segment_rtree.segment_rowid
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_segments.route_version_id
+    JOIN active_dataset
+        ON active_dataset.generation_id = dataset_route_versions.generation_id
+        AND active_dataset.singleton = 1
+    JOIN routes
+        ON routes.id = dataset_route_versions.route_id
+    WHERE segment_rtree.min_lng <= ?
+        AND segment_rtree.max_lng >= ?
+        AND segment_rtree.min_lat <= ?
+        AND segment_rtree.max_lat >= ?
 """
 
 
@@ -307,8 +340,18 @@ class CandidateAdapter:
     def active_generation(self) -> str | None:
         """Return the published generation visible to new readers."""
         with self._connect() as connection:
-            row = connection.execute("SELECT generation_id FROM active_dataset WHERE singleton = 1").fetchone()
-        return None if row is None else str(row[0])
+            return self._active_generation(connection)
+
+    def has_generation(self, generation_id: str) -> bool:
+        """Return whether a generation row is visible to a fresh connection."""
+        with self._connect() as connection:
+            return (
+                connection.execute(
+                    "SELECT EXISTS(SELECT 1 FROM dataset_generations WHERE id = ?)",
+                    (generation_id,),
+                ).fetchone()[0]
+                == 1
+            )
 
     def active_segment_count(self) -> int:
         """Return the segment count reachable through the active membership."""
@@ -330,21 +373,7 @@ class CandidateAdapter:
     def active_route_version_ids(self) -> tuple[str, ...]:
         """Return the route-version membership visible through the active pointer."""
         with self._connect() as connection:
-            return tuple(
-                str(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT member.route_version_id
-                    FROM active_dataset AS active
-                    JOIN dataset_route_versions AS member
-                        ON member.generation_id = active.generation_id
-                    JOIN routes AS route
-                        ON route.id = member.route_id
-                    WHERE active.singleton = 1
-                    ORDER BY route.code, member.route_version_id
-                    """
-                )
-            )
+            return self._active_route_version_ids(connection)
 
     def capture(
         self,
@@ -410,6 +439,65 @@ class CandidateAdapter:
     ) -> tuple[tuple[str, float], ...]:
         with self._connect() as connection:
             return self._nearby(connection, sample)
+
+    @contextmanager
+    def reader_connection(self) -> Iterator[sqlite3.Connection]:
+        """Open one dedicated connection for the multiprocess reader probe."""
+        with self._connect() as connection:
+            yield connection
+
+    def reader_workload(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        stale_route_code: str,
+        default_radius_sample: NearbySample,
+        maximum_radius_sample: NearbySample,
+    ) -> tuple[str, tuple[str, ...], ReaderWorkload]:
+        """Read one representative workload from one consistent SQLite snapshot."""
+        connection.execute("BEGIN")
+        try:
+            generation = self._active_generation(connection)
+            if generation is None:
+                raise RuntimeError("reader workload found no active generation")
+            workload = (
+                self._route_search(connection),
+                self._direction_choice(connection),
+                self._maximum_geometry(connection),
+                self._version_lookups(connection, {stale_route_code}),
+                self._nearby(connection, default_radius_sample),
+                self._nearby(connection, maximum_radius_sample),
+            )
+            membership = self._active_route_version_ids(connection)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        return generation, membership, workload
+
+    def nearby_query_plan(self, sample: NearbySample) -> tuple[str, ...]:
+        """Return the SQLite planner detail for the active-generation nearby read."""
+        min_lng, max_lng, min_lat, max_lat = search_bounds(
+            sample.lat,
+            sample.lng,
+            sample.radius_meters,
+        )
+        with self._connect() as connection:
+            return tuple(
+                str(row[3])
+                for row in connection.execute(
+                    f"EXPLAIN QUERY PLAN {_NEARBY_SQL}",
+                    (max_lng, min_lng, max_lat, min_lat),
+                )
+            )
+
+    def checkpoint_truncate(self) -> tuple[int, int, int]:
+        """Checkpoint the WAL with the same truncate mode used by the probe."""
+        with self._connect() as connection:
+            row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if row is None:
+            raise RuntimeError("TRUNCATE checkpoint returned no result row")
+        return tuple(int(value) for value in row)
 
     def backup_to(self, path: Path) -> None:
         """Create an online SQLite snapshot using the native backup API."""
@@ -843,6 +931,29 @@ class CandidateAdapter:
             raise RuntimeError(f"generation child ordering is not unique: {generation_id}")
 
     @staticmethod
+    def _active_generation(connection: sqlite3.Connection) -> str | None:
+        row = connection.execute("SELECT generation_id FROM active_dataset WHERE singleton = 1").fetchone()
+        return None if row is None else str(row[0])
+
+    @staticmethod
+    def _active_route_version_ids(connection: sqlite3.Connection) -> tuple[str, ...]:
+        return tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT member.route_version_id
+                FROM active_dataset AS active
+                JOIN dataset_route_versions AS member
+                    ON member.generation_id = active.generation_id
+                JOIN routes AS route
+                    ON route.id = member.route_id
+                WHERE active.singleton = 1
+                ORDER BY route.code, member.route_version_id
+                """
+            )
+        )
+
+    @staticmethod
     def _route_search(
         connection: sqlite3.Connection,
     ) -> tuple[tuple[str, ...], ...]:
@@ -920,6 +1031,40 @@ class CandidateAdapter:
         return tuple(result)
 
     @staticmethod
+    def _direction_choice(connection: sqlite3.Connection) -> tuple[str, ...]:
+        direction = connection.execute(
+            """
+            SELECT direction.id
+            FROM active_dataset AS active
+            JOIN dataset_route_versions AS member
+                ON member.generation_id = active.generation_id
+            JOIN routes AS route
+                ON route.id = member.route_id
+            JOIN route_directions AS direction
+                ON direction.route_version_id = member.route_version_id
+            WHERE active.singleton = 1
+            ORDER BY route.code, direction.sequence
+            LIMIT 1
+            """
+        ).fetchone()
+        if direction is None:
+            raise RuntimeError("reader workload found no active direction")
+        labels = tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT departure_label
+                FROM service_directions
+                WHERE route_direction_id = ?
+                    AND confidence IN ('high', 'medium')
+                ORDER BY sequence
+                """,
+                (direction[0],),
+            )
+        )
+        return (str(direction[0]), *labels)
+
+    @staticmethod
     def _geometry(
         connection: sqlite3.Connection,
     ) -> tuple[tuple[str, ...], ...]:
@@ -959,6 +1104,47 @@ class CandidateAdapter:
                 ORDER BY route.code, direction.sequence, segment.sequence
                 """
             )
+        )
+
+    @staticmethod
+    def _maximum_geometry(connection: sqlite3.Connection) -> tuple[str, ...]:
+        row = connection.execute(
+            """
+            SELECT
+                segment.route_version_id,
+                segment.route_direction_id,
+                segment.public_id,
+                segment.sequence,
+                segment.geometry,
+                segment.bearing_degrees,
+                segment.distance_meters,
+                segment.cumulative_distance_meters
+            FROM active_dataset AS active
+            JOIN dataset_route_versions AS member
+                ON member.generation_id = active.generation_id
+            JOIN routes AS route
+                ON route.id = member.route_id
+            JOIN route_directions AS direction
+                ON direction.route_version_id = member.route_version_id
+            JOIN route_segments AS segment
+                ON segment.route_version_id = member.route_version_id
+                AND segment.route_direction_id = direction.id
+            WHERE active.singleton = 1
+            ORDER BY route.code DESC, direction.sequence DESC, segment.sequence DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("reader workload found no active geometry")
+        return (
+            str(row[0]),
+            str(row[1]),
+            str(row[2]),
+            str(row[3]),
+            str(row[4]),
+            _postgres_text(row[5]),
+            _postgres_text(row[6]),
+            _postgres_text(row[7]),
         )
 
     @staticmethod
@@ -1013,30 +1199,7 @@ class CandidateAdapter:
             sample.radius_meters,
         )
         candidates = connection.execute(
-            """
-            SELECT
-                route.id,
-                route.code,
-                route.name,
-                segment.start_lat,
-                segment.start_lng,
-                segment.end_lat,
-                segment.end_lng
-            FROM segment_rtree AS spatial
-            JOIN route_segments AS segment
-                ON segment.segment_rowid = spatial.segment_rowid
-            JOIN dataset_route_versions AS member
-                ON member.route_version_id = segment.route_version_id
-            JOIN active_dataset AS active
-                ON active.generation_id = member.generation_id
-                AND active.singleton = 1
-            JOIN routes AS route
-                ON route.id = member.route_id
-            WHERE spatial.min_lng <= ?
-                AND spatial.max_lng >= ?
-                AND spatial.min_lat <= ?
-                AND spatial.max_lat >= ?
-            """,
+            _NEARBY_SQL,
             (max_lng, min_lng, max_lat, min_lat),
         )
         by_route: dict[str, tuple[str, str, float]] = {}

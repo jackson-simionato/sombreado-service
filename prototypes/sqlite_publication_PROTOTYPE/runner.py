@@ -183,6 +183,76 @@ def run_publication(*, keep_temp: bool = False) -> bool:
         return result.passed
 
 
+def run_concurrency(*, keep_temp: bool = False) -> bool:
+    reference, fixture_count = _setup_reference()
+    generation_a_rows = reference.export_generations()
+    reference_a = _capture_reference_publication_behavior(reference)
+    snapshots = load_snapshots(FIXTURE_PATH)
+    if len(snapshots) != fixture_count:
+        raise RuntimeError("generation B fixture count differs from generation A")
+    _persist_generation_b(snapshots)
+    generation_b_rows = reference.export_generations()
+    reference_b = _capture_reference_publication_behavior(reference)
+
+    with _candidate_directory(keep=keep_temp) as temp_dir:
+        candidate = CandidateAdapter(temp_dir / "candidate.sqlite")
+        state = LabState(temp_dir=temp_dir)
+        result = ScenarioLab(
+            reference,
+            candidate,
+            state=state,
+            generation_a_rows=generation_a_rows,
+            generation_b_rows=generation_b_rows,
+            reference_a=reference_a,
+            reference_b=reference_b,
+        ).run_concurrency()
+
+        print(f"scenario={result.name}")
+        print(f"passed={str(result.passed).lower()}")
+        print(f"fixture_routes={fixture_count}")
+        print(f"active_generation={state.active_generation}")
+        for key, value in result.facts:
+            print(f"fact.{key}={value}")
+        for index, failure in enumerate(result.failures, start=1):
+            print(f"failure.{index}={failure}")
+        return result.passed
+
+
+def run_durability(*, keep_temp: bool = False) -> bool:
+    reference, fixture_count = _setup_reference()
+    generation_a_rows = reference.export_generations()
+    reference_a = _capture_reference_publication_behavior(reference)
+    snapshots = load_snapshots(FIXTURE_PATH)
+    if len(snapshots) != fixture_count:
+        raise RuntimeError("generation B fixture count differs from generation A")
+    _persist_generation_b(snapshots)
+    generation_b_rows = reference.export_generations()
+    reference_b = _capture_reference_publication_behavior(reference)
+
+    with _candidate_directory(keep=keep_temp) as temp_dir:
+        candidate = CandidateAdapter(temp_dir / "candidate.sqlite")
+        state = LabState(temp_dir=temp_dir)
+        result = ScenarioLab(
+            reference,
+            candidate,
+            state=state,
+            generation_a_rows=generation_a_rows,
+            generation_b_rows=generation_b_rows,
+            reference_a=reference_a,
+            reference_b=reference_b,
+        ).run_durability()
+
+        print(f"scenario={result.name}")
+        print(f"passed={str(result.passed).lower()}")
+        print(f"fixture_routes={fixture_count}")
+        print(f"active_generation={state.active_generation}")
+        for key, value in result.facts:
+            print(f"fact.{key}={value}")
+        for index, failure in enumerate(result.failures, start=1):
+            print(f"failure.{index}={failure}")
+        return result.passed
+
+
 def main() -> None:
     args = parse_args()
     state = LabState()
@@ -192,6 +262,14 @@ def main() -> None:
             raise SystemExit(1)
     elif args.run == "publication":
         passed = run_publication(keep_temp=args.keep_temp)
+        if not passed:
+            raise SystemExit(1)
+    elif args.run == "concurrency":
+        passed = run_concurrency(keep_temp=args.keep_temp)
+        if not passed:
+            raise SystemExit(1)
+    elif args.run == "durability":
+        passed = run_durability(keep_temp=args.keep_temp)
         if not passed:
             raise SystemExit(1)
     elif args.run != "interactive":

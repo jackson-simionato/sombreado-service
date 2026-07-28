@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import queue
+import statistics
+import time
 from hashlib import sha256
 from itertools import zip_longest
-from typing import Final
+from pathlib import Path
+from typing import Final, TypeAlias
 
 from .candidate import CandidateAdapter, CanonicalRows
 from .models import BehaviorSnapshot, LabState, NearbySample, ScenarioResult
@@ -33,6 +38,14 @@ _PUBLICATION_SAMPLES: Final = tuple(
     )
     for radius in PUBLIC_RADII_METERS
 )
+_READER_START_TIMEOUT_SECONDS: Final = 30.0
+_READER_OBSERVATION_TIMEOUT_SECONDS: Final = 30.0
+_PROCESS_JOIN_TIMEOUT_SECONDS: Final = 10.0
+_QUEUE_POLL_SECONDS: Final = 0.1
+_READER_IDLE_SECONDS: Final = 0.005
+_KILLED_GENERATION_ID: Final = "generation-killed-writer"
+
+ReaderRecord: TypeAlias = tuple[str, float, str, str, str]
 
 
 class ScenarioLab:
@@ -283,6 +296,324 @@ class ScenarioLab:
         self.state.results["publication"] = result
         return result
 
+    def run_concurrency(self) -> ScenarioResult:
+        """Probe full-generation publication while a separate process reads snapshots."""
+        generation_a_rows, generation_b_rows, _reference_a, _reference_b = self._publication_inputs()
+        self._reset_to_generation_a(generation_a_rows)
+        stale_route_code = self.candidate.route_search()[0][3]
+        default_sample, maximum_sample = _PUBLICATION_SAMPLES
+        expected_a = _reader_expectation(
+            self.candidate,
+            stale_route_code=stale_route_code,
+            default_sample=default_sample,
+            maximum_sample=maximum_sample,
+        )
+        expected_b_candidate = CandidateAdapter(self.candidate.database_path.with_name("expected-concurrency-b.sqlite"))
+        expected_b_candidate.reset()
+        _publish_generation(expected_b_candidate, "generation-b", generation_b_rows)
+        expected_b = _reader_expectation(
+            expected_b_candidate,
+            stale_route_code=stale_route_code,
+            default_sample=default_sample,
+            maximum_sample=maximum_sample,
+        )
+
+        failures = _FailureRecorder()
+        if expected_a[1] == expected_b[1]:
+            failures.add("generation A and B reader workload digests are identical")
+        if expected_a[2] == expected_b[2]:
+            failures.add("generation A and B active route-version membership is identical")
+
+        context = multiprocessing.get_context("spawn")
+        stop_event = context.Event()
+        reader_queue = context.Queue()
+        reader = context.Process(
+            target=_reader_process,
+            args=(
+                str(self.candidate.database_path),
+                reader_queue,
+                stop_event,
+                stale_route_code,
+                default_sample,
+                maximum_sample,
+            ),
+            name="sqlite-publication-reader",
+        )
+        records: list[ReaderRecord] = []
+        reader.start()
+        observed_a = _collect_reader_until(
+            reader,
+            reader_queue,
+            records,
+            expected_digest=expected_a[1],
+            timeout_seconds=_READER_START_TIMEOUT_SECONDS,
+        )
+        if not observed_a:
+            failures.add("reader did not observe complete generation A before publication")
+
+        checkpoint_result: tuple[int, int, int] | None = None
+        backup_path = self.candidate.database_path.with_name("concurrency-backup.sqlite")
+        try:
+            _publish_generation(self.candidate, "generation-b", generation_b_rows)
+            checkpoint_result = self.candidate.checkpoint_truncate()
+            self.candidate.backup_to(backup_path)
+        except BaseException as error:
+            failures.add(f"concurrent lifecycle operation failed: {type(error).__name__}: {error}")
+        checkpoint_ok = checkpoint_result is not None and checkpoint_result[0] == 0
+        if not checkpoint_ok:
+            failures.add(f"TRUNCATE checkpoint reported busy: {_checkpoint_text(checkpoint_result)}")
+
+        observed_b = _collect_reader_until(
+            reader,
+            reader_queue,
+            records,
+            expected_digest=expected_b[1],
+            timeout_seconds=_READER_OBSERVATION_TIMEOUT_SECONDS,
+        )
+        if not observed_b:
+            failures.add("reader did not observe complete generation B after publication")
+        if not _stop_reader(reader, stop_event):
+            failures.add("reader did not exit within the bounded shutdown timeout")
+        _drain_reader_queue(reader_queue, records)
+        reader_queue.close()
+        reader_queue.join_thread()
+
+        expected_by_generation = {
+            expected_a[0]: expected_a,
+            expected_b[0]: expected_b,
+        }
+        known_digests = {expected_a[1], expected_b[1]}
+        successful_reads = 0
+        busy_errors = 0
+        reader_errors = 0
+        unknown_digests = 0
+        mixed_generation_reads = 0
+        generation_a_observations = 0
+        generation_b_observations = 0
+        latencies = [record[1] for record in records]
+        for generation, _elapsed_ms, error_text, digest, membership_digest in records:
+            if error_text:
+                reader_errors += 1
+                if "locked" in error_text.lower() or "busy" in error_text.lower():
+                    busy_errors += 1
+                failures.add(f"reader error: {error_text}")
+                continue
+            expected = expected_by_generation.get(generation)
+            if digest not in known_digests:
+                unknown_digests += 1
+                failures.add(f"reader observed unknown content digest {digest}")
+                continue
+            if expected is None or (digest, membership_digest) != (expected[1], expected[3]):
+                mixed_generation_reads += 1
+                failures.add(
+                    "reader observed mixed generation "
+                    f"generation={generation!r} digest={digest} membership_digest={membership_digest}"
+                )
+                continue
+            successful_reads += 1
+            if generation == "generation-a":
+                generation_a_observations += 1
+            elif generation == "generation-b":
+                generation_b_observations += 1
+
+        plans: tuple[tuple[str, ...], ...] = ()
+        try:
+            plans = tuple(self.candidate.nearby_query_plan(sample) for sample in _PUBLICATION_SAMPLES)
+        except BaseException as error:
+            failures.add(f"nearby query plan inspection failed: {type(error).__name__}: {error}")
+        plan_details = tuple(detail for plan in plans for detail in plan)
+        plan_uses_rtree = bool(plans) and all(
+            any("segment_rtree" in detail.lower() for detail in plan) for plan in plans
+        )
+        plan_uses_active_membership = bool(plans) and all(
+            any("dataset_route_versions" in detail.lower() for detail in plan)
+            and any("active_dataset" in detail.lower() for detail in plan)
+            for plan in plans
+        )
+        if not plan_uses_rtree:
+            failures.add("nearby query plan did not name segment_rtree")
+        if not plan_uses_active_membership:
+            failures.add("nearby query plan did not use active generation membership")
+
+        p50_ms, p95_ms, maximum_ms = _latency_summary(latencies)
+        facts = (
+            ("requests", str(len(records))),
+            ("successful_reads", str(successful_reads)),
+            ("generation_a_observations", str(generation_a_observations)),
+            ("generation_b_observations", str(generation_b_observations)),
+            ("p50_ms", f"{p50_ms:.6f}"),
+            ("p95_ms", f"{p95_ms:.6f}"),
+            ("maximum_ms", f"{maximum_ms:.6f}"),
+            ("busy_errors", str(busy_errors)),
+            ("reader_errors", str(reader_errors)),
+            ("unknown_digests", str(unknown_digests)),
+            ("mixed_generation_reads", str(mixed_generation_reads)),
+            ("generation_a_digest", expected_a[1]),
+            ("generation_b_digest", expected_b[1]),
+            ("checkpoint", _checkpoint_text(checkpoint_result)),
+            ("online_backup_exists", str(backup_path.exists()).lower()),
+            ("plan_uses_segment_rtree", str(plan_uses_rtree).lower()),
+            ("plan_uses_active_membership", str(plan_uses_active_membership).lower()),
+            ("plan_details", " | ".join(plan_details)),
+        )
+        result = ScenarioResult(
+            name="concurrency",
+            passed=(
+                not failures.details
+                and observed_a
+                and observed_b
+                and generation_a_observations > 0
+                and generation_b_observations > 0
+                and busy_errors == 0
+                and mixed_generation_reads == 0
+                and unknown_digests == 0
+                and reader_errors == 0
+                and plan_uses_rtree
+                and plan_uses_active_membership
+                and checkpoint_ok
+                and backup_path.exists()
+            ),
+            facts=facts,
+            failures=tuple(failures.details),
+        )
+        self.state.active_generation = self.candidate.active_generation()
+        self.state.results["concurrency"] = result
+        return result
+
+    def run_durability(self) -> ScenarioResult:
+        """Kill an uncommitted writer, then verify recovery and a restored backup."""
+        generation_a_rows, generation_b_rows, _reference_a, _reference_b = self._publication_inputs()
+        self._reset_to_generation_a(generation_a_rows)
+        _publish_generation(self.candidate, "generation-b", generation_b_rows)
+        baseline = _capture_publication_behavior(self.candidate)
+        baseline_digest = _behavior_digest(baseline)
+        marker_route_id, marker_version_id = self.candidate.route_search()[0][:2]
+
+        failures = _FailureRecorder()
+        context = multiprocessing.get_context("spawn")
+        parent_connection, child_connection = context.Pipe(duplex=False)
+        writer = context.Process(
+            target=_killable_writer_process,
+            args=(
+                str(self.candidate.database_path),
+                _KILLED_GENERATION_ID,
+                marker_route_id,
+                marker_version_id,
+                child_connection,
+            ),
+            name="sqlite-killable-writer",
+        )
+        writer.start()
+        child_connection.close()
+        writer_ready = False
+        if parent_connection.poll(_PROCESS_JOIN_TIMEOUT_SECONDS):
+            writer_message = parent_connection.recv()
+            writer_ready = writer_message == "ready"
+            if not writer_ready:
+                failures.add(f"killable writer failed before ready: {writer_message}")
+        else:
+            failures.add("killable writer did not signal an open transaction before timeout")
+        parent_connection.close()
+        if writer.is_alive():
+            writer.kill()
+        writer.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+        if writer.is_alive():
+            failures.add("killable writer did not exit after Process.kill()")
+            writer.kill()
+            writer.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+
+        killed_transaction_visible = self.candidate.has_generation(_KILLED_GENERATION_ID)
+        recovered_generation = self.candidate.active_generation()
+        recovered = _capture_publication_behavior(self.candidate)
+        recovered_behavior_match = recovered == baseline and _behavior_digest(recovered) == baseline_digest
+        if killed_transaction_visible:
+            failures.add("fresh connection found the killed writer marker generation")
+        if recovered_generation != "generation-b":
+            failures.add(f"active generation after writer death was {recovered_generation!r}")
+        if not recovered_behavior_match:
+            failures.add("active behavior changed after the uncommitted writer was killed")
+
+        integrity_rows, foreign_key_rows = self.candidate.integrity()
+        integrity_ok = integrity_rows == (("ok",),)
+        if not integrity_ok:
+            failures.add(f"candidate integrity check failed: {integrity_rows!r}")
+        if foreign_key_rows:
+            failures.add(f"candidate foreign key check found rows: {foreign_key_rows!r}")
+
+        checkpoint_result: tuple[int, int, int] | None = None
+        restored_path = self.candidate.database_path.with_name("restored.sqlite")
+        try:
+            checkpoint_result = self.candidate.checkpoint_truncate()
+            self.candidate.backup_to(restored_path)
+        except BaseException as error:
+            failures.add(f"recovery backup operation failed: {type(error).__name__}: {error}")
+        checkpoint_ok = checkpoint_result is not None and checkpoint_result[0] == 0
+        if not checkpoint_ok:
+            failures.add(f"TRUNCATE checkpoint reported busy: {_checkpoint_text(checkpoint_result)}")
+
+        restored_integrity_rows: tuple[tuple[object, ...], ...] = ()
+        restored_foreign_key_rows: tuple[tuple[object, ...], ...] = ()
+        restored_behavior_match = False
+        restored_generation: str | None = None
+        if restored_path.exists():
+            restored = CandidateAdapter(restored_path)
+            restored_integrity_rows, restored_foreign_key_rows = restored.integrity()
+            restored_generation = restored.active_generation()
+            restored_behavior = _capture_publication_behavior(restored)
+            restored_behavior_match = (
+                restored_generation == "generation-b"
+                and restored_behavior == baseline
+                and _behavior_digest(restored_behavior) == baseline_digest
+            )
+            if restored_integrity_rows != (("ok",),):
+                failures.add(f"restored integrity check failed: {restored_integrity_rows!r}")
+            if restored_foreign_key_rows:
+                failures.add(f"restored foreign key check found rows: {restored_foreign_key_rows!r}")
+            if not restored_behavior_match:
+                failures.add("restored behavior did not equal the pre-kill active behavior")
+        else:
+            failures.add("recovery backup did not create restored.sqlite")
+
+        facts = (
+            ("writer_ready", str(writer_ready).lower()),
+            ("writer_exitcode", str(writer.exitcode)),
+            ("killed_transaction_visible", str(killed_transaction_visible).lower()),
+            ("recovered_generation", recovered_generation or "<none>"),
+            ("recovered_behavior_match", str(recovered_behavior_match).lower()),
+            ("integrity", _integrity_text(integrity_rows)),
+            ("foreign_key_violations", str(len(foreign_key_rows))),
+            ("checkpoint", _checkpoint_text(checkpoint_result)),
+            ("restored_exists", str(restored_path.exists()).lower()),
+            ("restored_generation", restored_generation or "<none>"),
+            ("restored_integrity", _integrity_text(restored_integrity_rows)),
+            ("restored_foreign_key_violations", str(len(restored_foreign_key_rows))),
+            ("restored_behavior_match", str(restored_behavior_match).lower()),
+            ("baseline_behavior_digest", baseline_digest),
+        )
+        result = ScenarioResult(
+            name="durability",
+            passed=(
+                not failures.details
+                and writer_ready
+                and writer.exitcode is not None
+                and not killed_transaction_visible
+                and recovered_generation == "generation-b"
+                and recovered_behavior_match
+                and integrity_ok
+                and not foreign_key_rows
+                and checkpoint_ok
+                and restored_path.exists()
+                and restored_integrity_rows == (("ok",),)
+                and not restored_foreign_key_rows
+                and restored_behavior_match
+            ),
+            facts=facts,
+            failures=tuple(failures.details),
+        )
+        self.state.active_generation = recovered_generation
+        self.state.results["durability"] = result
+        return result
+
     def _publication_inputs(
         self,
     ) -> tuple[CanonicalRows, CanonicalRows, BehaviorSnapshot, BehaviorSnapshot]:
@@ -303,6 +634,174 @@ class ScenarioLab:
     def _reset_to_generation_a(self, rows: CanonicalRows) -> None:
         self.candidate.reset()
         _publish_generation(self.candidate, "generation-a", rows)
+
+
+def _reader_process(
+    database_path: str,
+    reader_queue,
+    stop_event,
+    stale_route_code: str,
+    default_sample: NearbySample,
+    maximum_sample: NearbySample,
+) -> None:
+    """Continuously capture one read mix on a dedicated child-process connection."""
+    started_at = time.monotonic()
+    try:
+        candidate = CandidateAdapter(Path(database_path))
+        with candidate.reader_connection() as connection:
+            while not stop_event.is_set():
+                iteration_started_at = time.perf_counter()
+                generation = "<none>"
+                digest = ""
+                membership_digest = ""
+                error_text = ""
+                try:
+                    generation, membership, workload = candidate.reader_workload(
+                        connection,
+                        stale_route_code=stale_route_code,
+                        default_radius_sample=default_sample,
+                        maximum_radius_sample=maximum_sample,
+                    )
+                    digest = _reader_workload_digest(workload)
+                    membership_digest = _membership_digest(membership)
+                except BaseException as error:
+                    error_text = f"{type(error).__name__}: {error}"
+                elapsed_ms = (time.perf_counter() - iteration_started_at) * 1000.0
+                reader_queue.put((generation, elapsed_ms, error_text, digest, membership_digest))
+                if stop_event.wait(_READER_IDLE_SECONDS):
+                    break
+    except BaseException as error:
+        elapsed_ms = (time.monotonic() - started_at) * 1000.0
+        reader_queue.put(("<none>", elapsed_ms, f"{type(error).__name__}: {error}", "", ""))
+
+
+def _killable_writer_process(
+    database_path: str,
+    marker_generation_id: str,
+    route_id: str,
+    route_version_id: str,
+    ready_connection,
+) -> None:
+    """Leave a marker transaction uncommitted until the parent kills this process."""
+    try:
+        candidate = CandidateAdapter(Path(database_path))
+        with candidate.reader_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO dataset_generations(id, status, created_at)
+                VALUES (?, 'staging', 'writer-death-probe')
+                """,
+                (marker_generation_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO dataset_route_versions(generation_id, route_id, route_version_id)
+                VALUES (?, ?, ?)
+                """,
+                (marker_generation_id, route_id, route_version_id),
+            )
+            ready_connection.send("ready")
+            while True:
+                time.sleep(1.0)
+    except BaseException as error:
+        try:
+            ready_connection.send(f"{type(error).__name__}: {error}")
+        except BrokenPipeError, OSError:
+            pass
+    finally:
+        ready_connection.close()
+
+
+def _reader_expectation(
+    candidate: CandidateAdapter,
+    *,
+    stale_route_code: str,
+    default_sample: NearbySample,
+    maximum_sample: NearbySample,
+) -> tuple[str, str, tuple[str, ...], str]:
+    with candidate.reader_connection() as connection:
+        generation, membership, workload = candidate.reader_workload(
+            connection,
+            stale_route_code=stale_route_code,
+            default_radius_sample=default_sample,
+            maximum_radius_sample=maximum_sample,
+        )
+    return generation, _reader_workload_digest(workload), membership, _membership_digest(membership)
+
+
+def _reader_workload_digest(workload: object) -> str:
+    encoded = json.dumps(
+        workload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _membership_digest(membership: tuple[str, ...]) -> str:
+    encoded = json.dumps(membership, separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _collect_reader_until(
+    reader,
+    reader_queue,
+    records: list[ReaderRecord],
+    *,
+    expected_digest: str,
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            record = reader_queue.get(timeout=min(_QUEUE_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+        except queue.Empty:
+            if not reader.is_alive():
+                break
+            continue
+        records.append(record)
+        if record[2] == "" and record[3] == expected_digest:
+            return True
+    return False
+
+
+def _stop_reader(reader, stop_event) -> bool:
+    stop_event.set()
+    reader.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+    if reader.is_alive():
+        reader.kill()
+        reader.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+    return not reader.is_alive()
+
+
+def _drain_reader_queue(reader_queue, records: list[ReaderRecord]) -> None:
+    while True:
+        try:
+            records.append(reader_queue.get_nowait())
+        except queue.Empty:
+            return
+
+
+def _latency_summary(latencies: list[float]) -> tuple[float, float, float]:
+    if not latencies:
+        return 0.0, 0.0, 0.0
+    if len(latencies) == 1:
+        return latencies[0], latencies[0], latencies[0]
+    percentiles = statistics.quantiles(latencies, n=100, method="inclusive")
+    return percentiles[49], percentiles[94], max(latencies)
+
+
+def _checkpoint_text(checkpoint: tuple[int, int, int] | None) -> str:
+    if checkpoint is None:
+        return "<not-run>"
+    return ",".join(str(value) for value in checkpoint)
+
+
+def _integrity_text(rows: tuple[tuple[object, ...], ...]) -> str:
+    if not rows:
+        return "<not-run>"
+    return ",".join(str(value) for value in rows[0])
 
 
 class _FailureRecorder:
