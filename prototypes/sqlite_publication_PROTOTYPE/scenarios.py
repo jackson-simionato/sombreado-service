@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import queue
+import signal
 import statistics
 import time
 from hashlib import sha256
@@ -340,43 +342,61 @@ class ScenarioLab:
             name="sqlite-publication-reader",
         )
         records: list[ReaderRecord] = []
-        reader.start()
-        observed_a = _collect_reader_until(
-            reader,
-            reader_queue,
-            records,
-            expected_digest=expected_a[1],
-            timeout_seconds=_READER_START_TIMEOUT_SECONDS,
-        )
-        if not observed_a:
-            failures.add("reader did not observe complete generation A before publication")
-
+        observed_a = False
+        observed_b = False
         checkpoint_result: tuple[int, int, int] | None = None
         backup_path = self.candidate.database_path.with_name("concurrency-backup.sqlite")
+        reader_started = False
+        reader_exited = False
+        reader_forced_termination = False
         try:
-            _publish_generation(self.candidate, "generation-b", generation_b_rows)
-            checkpoint_result = self.candidate.checkpoint_truncate()
-            self.candidate.backup_to(backup_path)
-        except BaseException as error:
-            failures.add(f"concurrent lifecycle operation failed: {type(error).__name__}: {error}")
+            reader.start()
+            reader_started = True
+            observed_a = _collect_reader_until(
+                reader,
+                reader_queue,
+                records,
+                expected_digest=expected_a[1],
+                timeout_seconds=_READER_START_TIMEOUT_SECONDS,
+            )
+            if not observed_a:
+                failures.add("reader did not observe complete generation A before publication")
+
+            try:
+                _publish_generation(self.candidate, "generation-b", generation_b_rows)
+                checkpoint_result = self.candidate.checkpoint_truncate()
+                self.candidate.backup_to(backup_path)
+            except Exception as error:
+                failures.add(f"concurrent lifecycle operation failed: {type(error).__name__}: {error}")
+
+            observed_b = _collect_reader_until(
+                reader,
+                reader_queue,
+                records,
+                expected_digest=expected_b[1],
+                timeout_seconds=_READER_OBSERVATION_TIMEOUT_SECONDS,
+            )
+            if not observed_b:
+                failures.add("reader did not observe complete generation B after publication")
+        finally:
+            try:
+                if reader_started:
+                    reader_exited, reader_forced_termination = _stop_reader(reader, stop_event)
+            finally:
+                try:
+                    _drain_reader_queue(reader_queue, records)
+                finally:
+                    reader_queue.close()
+                    reader_queue.join_thread()
+
+        reader_clean_shutdown = reader_exited and not reader_forced_termination
+        if not reader_exited:
+            failures.add("reader did not exit within the bounded shutdown timeout")
+        if reader_forced_termination:
+            failures.add("reader required forced Process.kill() termination")
         checkpoint_ok = checkpoint_result is not None and checkpoint_result[0] == 0
         if not checkpoint_ok:
             failures.add(f"TRUNCATE checkpoint reported busy: {_checkpoint_text(checkpoint_result)}")
-
-        observed_b = _collect_reader_until(
-            reader,
-            reader_queue,
-            records,
-            expected_digest=expected_b[1],
-            timeout_seconds=_READER_OBSERVATION_TIMEOUT_SECONDS,
-        )
-        if not observed_b:
-            failures.add("reader did not observe complete generation B after publication")
-        if not _stop_reader(reader, stop_event):
-            failures.add("reader did not exit within the bounded shutdown timeout")
-        _drain_reader_queue(reader_queue, records)
-        reader_queue.close()
-        reader_queue.join_thread()
 
         expected_by_generation = {
             expected_a[0]: expected_a,
@@ -419,7 +439,7 @@ class ScenarioLab:
         plans: tuple[tuple[str, ...], ...] = ()
         try:
             plans = tuple(self.candidate.nearby_query_plan(sample) for sample in _PUBLICATION_SAMPLES)
-        except BaseException as error:
+        except Exception as error:
             failures.add(f"nearby query plan inspection failed: {type(error).__name__}: {error}")
         plan_details = tuple(detail for plan in plans for detail in plan)
         plan_uses_rtree = bool(plans) and all(
@@ -448,6 +468,8 @@ class ScenarioLab:
             ("reader_errors", str(reader_errors)),
             ("unknown_digests", str(unknown_digests)),
             ("mixed_generation_reads", str(mixed_generation_reads)),
+            ("reader_clean_shutdown", str(reader_clean_shutdown).lower()),
+            ("reader_forced_termination", str(reader_forced_termination).lower()),
             ("generation_a_digest", expected_a[1]),
             ("generation_b_digest", expected_b[1]),
             ("checkpoint", _checkpoint_text(checkpoint_result)),
@@ -468,6 +490,8 @@ class ScenarioLab:
                 and mixed_generation_reads == 0
                 and unknown_digests == 0
                 and reader_errors == 0
+                and reader_clean_shutdown
+                and not reader_forced_termination
                 and plan_uses_rtree
                 and plan_uses_active_membership
                 and checkpoint_ok
@@ -503,24 +527,49 @@ class ScenarioLab:
             ),
             name="sqlite-killable-writer",
         )
-        writer.start()
-        child_connection.close()
         writer_ready = False
-        if parent_connection.poll(_PROCESS_JOIN_TIMEOUT_SECONDS):
-            writer_message = parent_connection.recv()
-            writer_ready = writer_message == "ready"
-            if not writer_ready:
-                failures.add(f"killable writer failed before ready: {writer_message}")
-        else:
-            failures.add("killable writer did not signal an open transaction before timeout")
-        parent_connection.close()
-        if writer.is_alive():
-            writer.kill()
-        writer.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
-        if writer.is_alive():
-            failures.add("killable writer did not exit after Process.kill()")
-            writer.kill()
-            writer.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+        writer_started = False
+        writer_kill_issued = False
+        writer_exited = False
+        try:
+            writer.start()
+            writer_started = True
+            child_connection.close()
+            if parent_connection.poll(_PROCESS_JOIN_TIMEOUT_SECONDS):
+                writer_message = parent_connection.recv()
+                writer_ready = writer_message == "ready"
+                if not writer_ready:
+                    failures.add(f"killable writer failed before ready: {writer_message}")
+            else:
+                failures.add("killable writer did not signal an open transaction before timeout")
+
+            if writer_ready:
+                if writer.is_alive():
+                    writer.kill()
+                    writer_kill_issued = True
+                else:
+                    failures.add("ready writer exited before the parent could issue Process.kill()")
+                writer.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+        finally:
+            try:
+                if writer_started:
+                    if writer.is_alive():
+                        writer.kill()
+                    writer.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+                    writer_exited = not writer.is_alive()
+            finally:
+                try:
+                    parent_connection.close()
+                finally:
+                    child_connection.close()
+
+        if not writer_exited:
+            failures.add("killable writer did not exit within the bounded cleanup timeout")
+        writer_sigkill_exit = _is_sigkill_exit(writer.exitcode)
+        if writer_ready and not writer_kill_issued:
+            failures.add("parent did not issue Process.kill() after the writer ready signal")
+        if writer_kill_issued and not writer_sigkill_exit:
+            failures.add(f"killed writer exit status was {writer.exitcode!r}, expected SIGKILL")
 
         killed_transaction_visible = self.candidate.has_generation(_KILLED_GENERATION_ID)
         recovered_generation = self.candidate.active_generation()
@@ -545,7 +594,7 @@ class ScenarioLab:
         try:
             checkpoint_result = self.candidate.checkpoint_truncate()
             self.candidate.backup_to(restored_path)
-        except BaseException as error:
+        except Exception as error:
             failures.add(f"recovery backup operation failed: {type(error).__name__}: {error}")
         checkpoint_ok = checkpoint_result is not None and checkpoint_result[0] == 0
         if not checkpoint_ok:
@@ -576,6 +625,8 @@ class ScenarioLab:
 
         facts = (
             ("writer_ready", str(writer_ready).lower()),
+            ("writer_kill_issued", str(writer_kill_issued).lower()),
+            ("writer_sigkill_exit", str(writer_sigkill_exit).lower()),
             ("writer_exitcode", str(writer.exitcode)),
             ("killed_transaction_visible", str(killed_transaction_visible).lower()),
             ("recovered_generation", recovered_generation or "<none>"),
@@ -595,7 +646,9 @@ class ScenarioLab:
             passed=(
                 not failures.details
                 and writer_ready
-                and writer.exitcode is not None
+                and writer_kill_issued
+                and writer_sigkill_exit
+                and writer_exited
                 and not killed_transaction_visible
                 and recovered_generation == "generation-b"
                 and recovered_behavior_match
@@ -664,13 +717,13 @@ def _reader_process(
                     )
                     digest = _reader_workload_digest(workload)
                     membership_digest = _membership_digest(membership)
-                except BaseException as error:
+                except Exception as error:
                     error_text = f"{type(error).__name__}: {error}"
                 elapsed_ms = (time.perf_counter() - iteration_started_at) * 1000.0
                 reader_queue.put((generation, elapsed_ms, error_text, digest, membership_digest))
                 if stop_event.wait(_READER_IDLE_SECONDS):
                     break
-    except BaseException as error:
+    except Exception as error:
         elapsed_ms = (time.monotonic() - started_at) * 1000.0
         reader_queue.put(("<none>", elapsed_ms, f"{type(error).__name__}: {error}", "", ""))
 
@@ -704,10 +757,10 @@ def _killable_writer_process(
             ready_connection.send("ready")
             while True:
                 time.sleep(1.0)
-    except BaseException as error:
+    except Exception as error:
         try:
             ready_connection.send(f"{type(error).__name__}: {error}")
-        except BrokenPipeError, OSError:
+        except (BrokenPipeError, OSError):  # fmt: skip
             pass
     finally:
         ready_connection.close()
@@ -766,13 +819,21 @@ def _collect_reader_until(
     return False
 
 
-def _stop_reader(reader, stop_event) -> bool:
+def _stop_reader(reader, stop_event) -> tuple[bool, bool]:
     stop_event.set()
     reader.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
+    forced_termination = reader.is_alive()
     if reader.is_alive():
         reader.kill()
         reader.join(_PROCESS_JOIN_TIMEOUT_SECONDS)
-    return not reader.is_alive()
+    return not reader.is_alive(), forced_termination
+
+
+def _is_sigkill_exit(exitcode: int | None) -> bool:
+    sigkill = getattr(signal, "SIGKILL", None)
+    if os.name == "posix" and sigkill is not None:
+        return exitcode == -int(sigkill)
+    return exitcode is not None and exitcode != 0
 
 
 def _drain_reader_queue(reader_queue, records: list[ReaderRecord]) -> None:
