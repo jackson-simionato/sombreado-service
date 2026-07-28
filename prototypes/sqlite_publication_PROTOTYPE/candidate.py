@@ -327,6 +327,25 @@ class CandidateAdapter:
                 ).fetchone()[0]
             )
 
+    def active_route_version_ids(self) -> tuple[str, ...]:
+        """Return the route-version membership visible through the active pointer."""
+        with self._connect() as connection:
+            return tuple(
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT member.route_version_id
+                    FROM active_dataset AS active
+                    JOIN dataset_route_versions AS member
+                        ON member.generation_id = active.generation_id
+                    JOIN routes AS route
+                        ON route.id = member.route_id
+                    WHERE active.singleton = 1
+                    ORDER BY route.code, member.route_version_id
+                    """
+                )
+            )
+
     def capture(
         self,
         samples: Iterable[NearbySample],

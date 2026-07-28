@@ -8,11 +8,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from consorcio_fenix_scraper.db import make_session_factory, persist_snapshots
+from sqlalchemy import create_engine, text
+
 from .candidate import CandidateAdapter
 from .fixture import load_snapshots
-from .models import LabState
-from .reference import ReferenceAdapter
-from .scenarios import ScenarioLab
+from .models import LabState, NearbySample
+from .reference import REFERENCE_URL, SOURCE_URL, ReferenceAdapter
+from .scenarios import PUBLIC_RADII_METERS, ScenarioLab
 
 TITLE = "SQLite/PostGIS publication decision lab (PROTOTYPE)"
 QUESTION = (
@@ -105,11 +108,90 @@ def run_behavior(*, keep_temp: bool = False) -> bool:
         return result.passed
 
 
+def _capture_reference_publication_behavior(reference: ReferenceAdapter):
+    samples = tuple(
+        NearbySample(
+            lat=WORST_WORKLOAD_LOCATION[0],
+            lng=WORST_WORKLOAD_LOCATION[1],
+            radius_meters=radius,
+        )
+        for radius in PUBLIC_RADII_METERS
+    )
+    initial = reference.capture(samples)
+    return reference.capture(
+        samples,
+        stale_route_codes=tuple(row[3] for row in initial.identities),
+    )
+
+
+def _persist_generation_b(snapshots) -> None:
+    """Persist a deterministic, distinct version of every fixture snapshot."""
+    generation_b = tuple(
+        snapshot.model_copy(update={"source_hash": f"prototype-b:{snapshot.source_hash}"}) for snapshot in snapshots
+    )
+    if not all(snapshot.source_hash.startswith("prototype-b:") for snapshot in generation_b):
+        raise RuntimeError("generation B source hashes do not use the required prototype-b: prefix")
+
+    # The production scraper stores regular SHA-256 hashes in VARCHAR(64). This
+    # disposable reference deliberately uses the required prefixed marker.
+    engine = create_engine(REFERENCE_URL, future=True)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE route_versions ALTER COLUMN source_hash TYPE TEXT"))
+    finally:
+        engine.dispose()
+
+    session_factory = make_session_factory(REFERENCE_URL)
+    try:
+        persist_snapshots(session_factory, SOURCE_URL, generation_b)
+    finally:
+        session_factory.kw["bind"].dispose()
+
+
+def run_publication(*, keep_temp: bool = False) -> bool:
+    reference, fixture_count = _setup_reference()
+    generation_a_rows = reference.export_generations()
+    reference_a = _capture_reference_publication_behavior(reference)
+    snapshots = load_snapshots(FIXTURE_PATH)
+    if len(snapshots) != fixture_count:
+        raise RuntimeError("generation B fixture count differs from generation A")
+    _persist_generation_b(snapshots)
+    generation_b_rows = reference.export_generations()
+    reference_b = _capture_reference_publication_behavior(reference)
+
+    with _candidate_directory(keep=keep_temp) as temp_dir:
+        candidate = CandidateAdapter(temp_dir / "candidate.sqlite")
+        state = LabState(temp_dir=temp_dir)
+        result = ScenarioLab(
+            reference,
+            candidate,
+            state=state,
+            generation_a_rows=generation_a_rows,
+            generation_b_rows=generation_b_rows,
+            reference_a=reference_a,
+            reference_b=reference_b,
+        ).run_publication()
+
+        print(f"scenario={result.name}")
+        print(f"passed={str(result.passed).lower()}")
+        print(f"fixture_routes={fixture_count}")
+        print(f"active_generation={state.active_generation}")
+        for key, value in result.facts:
+            print(f"fact.{key}={value}")
+        for index, failure in enumerate(result.failures, start=1):
+            print(f"failure.{index}={failure}")
+        return result.passed
+
+
 def main() -> None:
     args = parse_args()
     state = LabState()
     if args.run == "behavior":
         passed = run_behavior(keep_temp=args.keep_temp)
+        if not passed:
+            raise SystemExit(1)
+    elif args.run == "publication":
+        passed = run_publication(keep_temp=args.keep_temp)
         if not passed:
             raise SystemExit(1)
     elif args.run != "interactive":

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from hashlib import sha256
 from itertools import zip_longest
 from typing import Final
 
-from .candidate import CandidateAdapter
+from .candidate import CandidateAdapter, CanonicalRows
 from .models import BehaviorSnapshot, LabState, NearbySample, ScenarioResult
 from .reference import ReferenceAdapter
 
@@ -17,6 +19,20 @@ _BOUNDARY_OFFSETS_METERS: Final = (-3.0, -1.0, 0.0, 1.0, 3.0)
 _MINIMUM_POSITIVE_RADIUS: Final = 0.001
 _MAX_RECORDED_FAILURES: Final = 20
 _MISSING: Final = object()
+_PUBLICATION_FAILURE_POINTS: Final = (
+    "before-write",
+    "during-write",
+    "before-validation",
+    "after-validation",
+)
+_PUBLICATION_SAMPLES: Final = tuple(
+    NearbySample(
+        lat=WORST_WORKLOAD_LOCATION[0],
+        lng=WORST_WORKLOAD_LOCATION[1],
+        radius_meters=radius,
+    )
+    for radius in PUBLIC_RADII_METERS
+)
 
 
 class ScenarioLab:
@@ -28,10 +44,18 @@ class ScenarioLab:
         candidate: CandidateAdapter,
         *,
         state: LabState | None = None,
+        generation_a_rows: CanonicalRows | None = None,
+        generation_b_rows: CanonicalRows | None = None,
+        reference_a: BehaviorSnapshot | None = None,
+        reference_b: BehaviorSnapshot | None = None,
     ) -> None:
         self.reference = reference
         self.candidate = candidate
         self.state = state or LabState()
+        self.generation_a_rows = generation_a_rows
+        self.generation_b_rows = generation_b_rows
+        self.reference_a = reference_a
+        self.reference_b = reference_b
 
     def run_behavior(self) -> ScenarioResult:
         """Run the deterministic browser-visible parity corpus."""
@@ -135,6 +159,151 @@ class ScenarioLab:
         self.state.results["behavior"] = result
         return result
 
+    def run_publication(self) -> ScenarioResult:
+        """Prove failures preserve A and one commit makes the complete B visible."""
+        generation_a_rows, generation_b_rows, reference_a, reference_b = self._publication_inputs()
+        expected_a_ids = _current_version_ids(generation_a_rows)
+        expected_b_ids = _current_version_ids(generation_b_rows)
+        if expected_a_ids & expected_b_ids:
+            raise RuntimeError("generation A and B route-version IDs must be disjoint")
+
+        self._reset_to_generation_a(generation_a_rows)
+        candidate_a = _capture_publication_behavior(self.candidate)
+        candidate_a_digest = _behavior_digest(candidate_a)
+
+        expected_b = CandidateAdapter(self.candidate.database_path.with_name("expected-generation-b.sqlite"))
+        expected_b.reset()
+        _publish_generation(expected_b, "generation-b", generation_b_rows)
+        candidate_b = _capture_publication_behavior(expected_b)
+        candidate_b_digest = _behavior_digest(candidate_b)
+
+        failures = _FailureRecorder()
+        a_non_spatial_mismatches = _compare_non_spatial(
+            reference_a,
+            candidate_a,
+            failures,
+        )
+        b_non_spatial_mismatches = _compare_non_spatial(
+            reference_b,
+            candidate_b,
+            failures,
+        )
+        if candidate_a_digest == candidate_b_digest:
+            failures.add("generation A and B have the same complete behavior digest")
+
+        injected_failures = 0
+        old_generation_preserved = 0
+        mixed_generation_reads = 0
+        for failure_point in _PUBLICATION_FAILURE_POINTS:
+            self._reset_to_generation_a(generation_a_rows)
+            try:
+                self.candidate.stage(
+                    "generation-b",
+                    generation_b_rows,
+                    fail_at=failure_point,
+                )
+            except RuntimeError as error:
+                if str(error) != f"injected candidate failure: {failure_point}":
+                    failures.add(f"{failure_point}: unexpected injected error: {error}")
+                else:
+                    injected_failures += 1
+            else:
+                failures.add(f"{failure_point}: staging did not raise the injected failure")
+
+            active_generation = self.candidate.active_generation()
+            observed = _capture_publication_behavior(self.candidate)
+            observed_digest = _behavior_digest(observed)
+            active_version_ids = set(self.candidate.active_route_version_ids())
+            mixed = bool(active_version_ids & expected_a_ids) and bool(active_version_ids & expected_b_ids)
+            if mixed:
+                mixed_generation_reads += 1
+                failures.add(f"{failure_point}: active membership mixes A and B route-version IDs")
+            preserved = (
+                active_generation == "generation-a"
+                and active_version_ids == expected_a_ids
+                and observed == candidate_a
+                and observed_digest == candidate_a_digest
+            )
+            if preserved:
+                old_generation_preserved += 1
+            else:
+                failures.add(
+                    f"{failure_point}: generation A was not completely preserved "
+                    f"active_generation={active_generation!r} "
+                    f"behavior_digest={observed_digest}"
+                )
+
+        self._reset_to_generation_a(generation_a_rows)
+        _publish_generation(self.candidate, "generation-b", generation_b_rows)
+        published_generation = self.candidate.active_generation()
+        published = _capture_publication_behavior(self.candidate)
+        published_digest = _behavior_digest(published)
+        published_ids = set(self.candidate.active_route_version_ids())
+        published_mixed = bool(published_ids & expected_a_ids) and bool(published_ids & expected_b_ids)
+        if published_mixed:
+            mixed_generation_reads += 1
+            failures.add("published B active membership mixes A and B route-version IDs")
+        if published_generation != "generation-b":
+            failures.add(f"published active generation was {published_generation!r}, expected 'generation-b'")
+        if published_ids != expected_b_ids:
+            failures.add("published B active membership does not equal generation B")
+        if published != candidate_b or published_digest != candidate_b_digest:
+            failures.add(
+                "published B complete behavior did not equal the deterministic generation B snapshot "
+                f"behavior_digest={published_digest}"
+            )
+
+        facts = (
+            ("injected_failures", str(injected_failures)),
+            ("old_generation_preserved", str(old_generation_preserved)),
+            ("mixed_generation_reads", str(mixed_generation_reads)),
+            ("published_generation", published_generation or "<none>"),
+            ("generation_a_route_versions", str(len(expected_a_ids))),
+            ("generation_b_route_versions", str(len(expected_b_ids))),
+            ("generation_a_behavior_digest", candidate_a_digest),
+            ("generation_b_behavior_digest", candidate_b_digest),
+            ("published_behavior_digest", published_digest),
+            ("generation_a_non_spatial_mismatches", str(a_non_spatial_mismatches)),
+            ("generation_b_non_spatial_mismatches", str(b_non_spatial_mismatches)),
+        )
+        result = ScenarioResult(
+            name="publication",
+            passed=(
+                not failures.details
+                and injected_failures == len(_PUBLICATION_FAILURE_POINTS)
+                and old_generation_preserved == len(_PUBLICATION_FAILURE_POINTS)
+                and mixed_generation_reads == 0
+                and published_generation == "generation-b"
+            ),
+            facts=facts,
+            failures=tuple(failures.details),
+        )
+        self.state.active_generation = published_generation
+        self.state.staging_generation = None
+        self.state.results["publication"] = result
+        return result
+
+    def _publication_inputs(
+        self,
+    ) -> tuple[CanonicalRows, CanonicalRows, BehaviorSnapshot, BehaviorSnapshot]:
+        if (
+            self.generation_a_rows is None
+            or self.generation_b_rows is None
+            or self.reference_a is None
+            or self.reference_b is None
+        ):
+            raise RuntimeError("publication scenario requires generation A/B exports and reference snapshots")
+        return (
+            self.generation_a_rows,
+            self.generation_b_rows,
+            self.reference_a,
+            self.reference_b,
+        )
+
+    def _reset_to_generation_a(self, rows: CanonicalRows) -> None:
+        self.candidate.reset()
+        _publish_generation(self.candidate, "generation-a", rows)
+
 
 class _FailureRecorder:
     def __init__(self) -> None:
@@ -143,6 +312,52 @@ class _FailureRecorder:
     def add(self, detail: str) -> None:
         if len(self.details) < _MAX_RECORDED_FAILURES:
             self.details.append(detail)
+
+
+def _publish_generation(
+    candidate: CandidateAdapter,
+    generation_id: str,
+    rows: CanonicalRows,
+) -> None:
+    candidate.stage(generation_id, rows)
+    candidate.validate(generation_id)
+    candidate.publish(generation_id)
+
+
+def _capture_publication_behavior(candidate: CandidateAdapter) -> BehaviorSnapshot:
+    route_codes = tuple(row[3] for row in candidate.route_search())
+    return candidate.capture(
+        _PUBLICATION_SAMPLES,
+        stale_route_codes=route_codes,
+    )
+
+
+def _current_version_ids(rows: CanonicalRows) -> set[str]:
+    return {str(row["id"]) for row in rows["route_versions"] if bool(row["is_current"])}
+
+
+def _behavior_digest(snapshot: BehaviorSnapshot) -> str:
+    payload = {
+        "identities": snapshot.identities,
+        "direction_labels": snapshot.direction_labels,
+        "geometry": snapshot.geometry,
+        "stale_version_results": snapshot.stale_version_results,
+        "nearby": tuple(
+            (
+                sample.lat,
+                sample.lng,
+                sample.radius_meters,
+                rows,
+            )
+            for sample, rows in snapshot.nearby
+        ),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 class _SpatialCounts:
