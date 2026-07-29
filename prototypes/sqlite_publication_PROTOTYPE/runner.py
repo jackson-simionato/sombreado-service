@@ -17,13 +17,14 @@ from .models import LabState, NearbySample, ScenarioResult, Verdict
 from .reference import REFERENCE_DATABASE, REFERENCE_URL, SOURCE_URL, ReferenceAdapter
 from .scenarios import PUBLIC_RADII_METERS, ScenarioLab
 
-TITLE = "SQLite/PostGIS publication decision lab (PROTOTYPE)"
+TITLE = "SpatiaLite nearby spatial parity lab (PROTOTYPE)"
 QUESTION = (
-    "Can core SQLite preserve browser-visible route reads and atomic dataset publication at the measured workload?"
+    "Can SpatiaLite close the nearby spatial parity gap vs PostGIS "
+    "while preserving publication, concurrency, and durability?"
 )
 SCENARIOS = ("interactive", "behavior", "publication", "concurrency", "durability", "all")
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "docs/research/fixtures/route-snapshots-2026-07-28.jsonl.gz"
-TEMPORARY_DIRECTORY_PREFIX = "sombreado-sqlite-prototype-"
+TEMPORARY_DIRECTORY_PREFIX = "sombreado-spatialite-prototype-"
 WORST_WORKLOAD_LOCATION = (-27.58967541174793, -48.53426644737102)
 _ACTION_SCENARIOS = {
     "b": "behavior",

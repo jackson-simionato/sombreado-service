@@ -1,7 +1,8 @@
-"""Core-SQLite candidate for the disposable publication PROTOTYPE."""
+"""SpatiaLite candidate for the disposable nearby-parity PROTOTYPE."""
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Iterator, TypeAlias
 from uuid import NAMESPACE_URL, uuid5
 
-from .geometry import point_to_segment_meters, search_bounds
+from .geometry import search_bounds
 from .models import BehaviorSnapshot, NearbySample
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
@@ -40,10 +41,34 @@ _FAILURE_POINTS = frozenset(
     }
 )
 
+_DEFAULT_SPATIALITE_EXTENSIONS = (
+    "/opt/homebrew/lib/mod_spatialite",
+    "/usr/local/lib/mod_spatialite",
+    "/usr/lib/x86_64-linux-gnu/mod_spatialite",
+    "mod_spatialite",
+)
+
+
+def _spatialite_extension_path() -> str:
+    """Return the loadable SpatiaLite module path for this host."""
+    configured = os.environ.get("SPATIALITE_EXTENSION")
+    if configured:
+        return configured
+    for candidate in _DEFAULT_SPATIALITE_EXTENSIONS:
+        path_candidate = Path(candidate)
+        if (
+            candidate == "mod_spatialite"
+            or path_candidate.exists()
+            or Path(f"{candidate}.dylib").exists()
+            or Path(f"{candidate}.so").exists()
+        ):
+            return candidate
+    raise RuntimeError("SpatiaLite extension not found; set SPATIALITE_EXTENSION")
+
+
 _SCHEMA = """
 BEGIN IMMEDIATE;
 
-DROP TABLE IF EXISTS segment_rtree;
 DROP TABLE IF EXISTS active_dataset;
 DROP TABLE IF EXISTS dataset_generation_counts;
 DROP TABLE IF EXISTS dataset_route_versions;
@@ -151,9 +176,6 @@ CREATE TABLE active_dataset (
     generation_id TEXT NOT NULL REFERENCES dataset_generations(id)
 );
 
-CREATE VIRTUAL TABLE segment_rtree
-USING rtree(segment_rowid, min_lng, max_lng, min_lat, max_lat);
-
 CREATE INDEX route_versions_route_id_idx
 ON route_versions(route_id);
 CREATE INDEX route_directions_version_sequence_idx
@@ -170,16 +192,10 @@ COMMIT;
 
 _NEARBY_SQL = """
     SELECT
-        routes.id,
         routes.code,
         routes.name,
-        route_segments.start_lat,
-        route_segments.start_lng,
-        route_segments.end_lat,
-        route_segments.end_lng
-    FROM segment_rtree
-    JOIN route_segments
-        ON route_segments.segment_rowid = segment_rtree.segment_rowid
+        MIN(ST_Distance(route_segments.geom, MakePoint(?, ?, 4326), 1)) AS distance_meters
+    FROM route_segments
     JOIN dataset_route_versions
         ON dataset_route_versions.route_version_id = route_segments.route_version_id
     JOIN active_dataset
@@ -187,24 +203,45 @@ _NEARBY_SQL = """
         AND active_dataset.singleton = 1
     JOIN routes
         ON routes.id = dataset_route_versions.route_id
-    WHERE segment_rtree.min_lng <= ?
-        AND segment_rtree.max_lng >= ?
-        AND segment_rtree.min_lat <= ?
-        AND segment_rtree.max_lat >= ?
+    WHERE route_segments.rowid IN (
+        SELECT rowid
+        FROM SpatialIndex
+        WHERE f_table_name = 'route_segments'
+            AND f_geometry_column = 'geom'
+            AND search_frame = BuildMbr(?, ?, ?, ?)
+    )
+    GROUP BY routes.id, routes.code, routes.name
+    HAVING distance_meters <= ?
+    ORDER BY distance_meters, routes.code, routes.name
 """
 
 
 class CandidateAdapter:
-    """Own the SQLite schema, generation lifecycle, and active-dataset reads."""
+    """Own the SpatiaLite schema, generation lifecycle, and active-dataset reads."""
 
     def __init__(self, database_path: Path) -> None:
         self.database_path = Path(database_path)
 
     def reset(self) -> None:
-        """Replace the disposable candidate schema with a fresh empty schema."""
+        """Replace the disposable candidate schema with a fresh SpatiaLite schema."""
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        for path in (
+            self.database_path,
+            Path(f"{self.database_path}-wal"),
+            Path(f"{self.database_path}-shm"),
+        ):
+            if path.exists():
+                path.unlink()
+        with self._connect(bootstrap_spatial=True) as connection:
             connection.executescript(_SCHEMA)
+            added = connection.execute(
+                "SELECT AddGeometryColumn('route_segments', 'geom', 4326, 'LINESTRING', 'XY')"
+            ).fetchone()
+            if added is None or int(added[0]) != 1:
+                raise RuntimeError("AddGeometryColumn failed for route_segments.geom")
+            indexed = connection.execute("SELECT CreateSpatialIndex('route_segments', 'geom')").fetchone()
+            if indexed is None or int(indexed[0]) != 1:
+                raise RuntimeError("CreateSpatialIndex failed for route_segments.geom")
 
     def stage(
         self,
@@ -487,7 +524,15 @@ class CandidateAdapter:
                 str(row[3])
                 for row in connection.execute(
                     f"EXPLAIN QUERY PLAN {_NEARBY_SQL}",
-                    (max_lng, min_lng, max_lat, min_lat),
+                    (
+                        sample.lng,
+                        sample.lat,
+                        min_lng,
+                        min_lat,
+                        max_lng,
+                        max_lat,
+                        sample.radius_meters,
+                    ),
                 )
             )
 
@@ -519,6 +564,8 @@ class CandidateAdapter:
     def _connect(
         self,
         path: Path | None = None,
+        *,
+        bootstrap_spatial: bool = False,
     ) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(
             path or self.database_path,
@@ -529,18 +576,18 @@ class CandidateAdapter:
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
-            connection.execute(
-                """
-                CREATE VIRTUAL TABLE temp.__candidate_rtree_check
-                USING rtree(id, min_x, max_x, min_y, max_y)
-                """
-            )
-            connection.execute("DROP TABLE temp.__candidate_rtree_check")
-        except sqlite3.OperationalError as error:
+            connection.enable_load_extension(True)
+            connection.load_extension(_spatialite_extension_path())
+            if bootstrap_spatial:
+                initialized = connection.execute("SELECT InitSpatialMetadata(1)").fetchone()
+                if initialized is None or int(initialized[0]) != 1:
+                    raise RuntimeError("InitSpatialMetadata failed")
+            version = connection.execute("SELECT spatialite_version()").fetchone()
+            if version is None or not version[0]:
+                raise RuntimeError("SpatiaLite extension did not report a version")
+        except (AttributeError, RuntimeError, sqlite3.DatabaseError, sqlite3.OperationalError) as error:
             connection.close()
-            if "rtree" in str(error).lower() or "module" in str(error).lower():
-                raise RuntimeError("SQLite R*Tree module is unavailable") from error
-            raise
+            raise RuntimeError(f"SpatiaLite is unavailable: {error}") from error
         try:
             yield connection
         finally:
@@ -746,17 +793,9 @@ class CandidateAdapter:
         )
         connection.execute(
             """
-            INSERT INTO segment_rtree(segment_rowid, min_lng, max_lng, min_lat, max_lat)
-            SELECT
-                segment.segment_rowid,
-                segment.min_lng,
-                segment.max_lng,
-                segment.min_lat,
-                segment.max_lat
-            FROM route_segments AS segment
-            LEFT JOIN segment_rtree AS spatial
-                ON spatial.segment_rowid = segment.segment_rowid
-            WHERE spatial.segment_rowid IS NULL
+            UPDATE route_segments
+            SET geom = GeomFromEWKT(geometry)
+            WHERE geom IS NULL
             """
         )
 
@@ -865,9 +904,8 @@ class CandidateAdapter:
                     FROM dataset_route_versions AS member
                     JOIN route_segments AS segment
                         ON segment.route_version_id = member.route_version_id
-                    JOIN segment_rtree AS spatial
-                        ON spatial.segment_rowid = segment.segment_rowid
                     WHERE member.generation_id = ?
+                        AND segment.geom IS NOT NULL
                 )
             """,
             (generation_id,) * 5,
@@ -878,7 +916,7 @@ class CandidateAdapter:
         if tuple(counts[:4]) != tuple(expected):
             raise RuntimeError(f"generation counts do not match canonical export: {generation_id}")
         if counts[3] != counts[4]:
-            raise RuntimeError(f"generation R*Tree coverage is incomplete: {generation_id}")
+            raise RuntimeError(f"generation SpatiaLite geometry coverage is incomplete: {generation_id}")
 
         invalid_membership = connection.execute(
             """
@@ -1198,33 +1236,19 @@ class CandidateAdapter:
             sample.lng,
             sample.radius_meters,
         )
-        candidates = connection.execute(
+        rows = connection.execute(
             _NEARBY_SQL,
-            (max_lng, min_lng, max_lat, min_lat),
-        )
-        by_route: dict[str, tuple[str, str, float]] = {}
-        for row in candidates:
-            distance = point_to_segment_meters(
-                sample.lat,
+            (
                 sample.lng,
-                float(row[3]),
-                float(row[4]),
-                float(row[5]),
-                float(row[6]),
-            )
-            route_id = str(row[0])
-            current = by_route.get(route_id)
-            if current is None or distance < current[2]:
-                by_route[route_id] = (str(row[1]), str(row[2]), distance)
-
-        included = (value for value in by_route.values() if value[2] <= sample.radius_meters)
-        return tuple(
-            (route_code, distance)
-            for route_code, _route_name, distance in sorted(
-                included,
-                key=lambda value: (value[2], value[0], value[1]),
-            )
+                sample.lat,
+                min_lng,
+                min_lat,
+                max_lng,
+                max_lat,
+                sample.radius_meters,
+            ),
         )
+        return tuple((str(row[0]), float(row[2])) for row in rows)
 
     @staticmethod
     def _segment_values(row: Mapping[str, object]) -> tuple[object, ...]:

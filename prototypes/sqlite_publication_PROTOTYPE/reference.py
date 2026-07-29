@@ -1,7 +1,8 @@
-"""Disposable PostGIS reference for the SQLite publication PROTOTYPE."""
+"""Disposable PostGIS reference for the SpatiaLite nearby-parity PROTOTYPE."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from collections.abc import Iterable
@@ -24,7 +25,29 @@ ADMIN_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
 SOURCE_URL = "https://www.consorciofenix.com.br/horarios"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-_SCRAPER_ROOT = _REPOSITORY_ROOT.parent / "consorcio-fenix-scraper"
+
+
+def _resolve_scraper_root() -> Path:
+    """Locate the sibling Consórcio Fênix Scraper checkout used for local PostGIS."""
+    configured = os.environ.get("CONSORCIO_FENIX_SCRAPER_ROOT")
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured))
+    for root in (_REPOSITORY_ROOT, *_REPOSITORY_ROOT.parents):
+        candidates.append(root.parent / "consorcio-fenix-scraper")
+        candidates.append(root / "consorcio-fenix-scraper")
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if (resolved / "docker-compose.yml").is_file():
+            return resolved
+    raise RuntimeError("Consórcio Fênix Scraper checkout not found; set CONSORCIO_FENIX_SCRAPER_ROOT")
+
+
+_SCRAPER_ROOT = _resolve_scraper_root()
 _COMPOSE_FILE = _SCRAPER_ROOT / "docker-compose.yml"
 _COMPOSE_COMMAND = (
     "docker",

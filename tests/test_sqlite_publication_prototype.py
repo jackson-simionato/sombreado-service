@@ -2,7 +2,7 @@ from prototypes.sqlite_publication_PROTOTYPE.models import LabState, ScenarioRes
 from prototypes.sqlite_publication_PROTOTYPE.scenarios import ScenarioLab
 
 
-def test_verdict_prototypes_spatialite_for_an_isolated_rtree_plan_failure():
+def test_verdict_revised_app_distance_for_an_isolated_spatial_index_plan_failure():
     lab = _lab_with_required_results(
         concurrency=ScenarioResult(
             name="concurrency",
@@ -18,17 +18,17 @@ def test_verdict_prototypes_spatialite_for_an_isolated_rtree_plan_failure():
                 ("reader_forced_termination", "false"),
                 ("checkpoint", "0,0,0"),
                 ("online_backup_exists", "true"),
-                ("plan_uses_segment_rtree", "false"),
+                ("plan_uses_spatial_index", "false"),
                 ("plan_uses_active_membership", "true"),
             ),
-            failures=("nearby query plan did not name segment_rtree",),
+            failures=("nearby query plan did not use SpatiaLite SpatialIndex",),
         )
     )
 
-    assert lab.derive_verdict() is Verdict.prototype_spatialite
+    assert lab.derive_verdict() is Verdict.revised_app_distance
 
 
-def test_verdict_falls_back_for_a_busy_reader_even_when_the_rtree_plan_is_missing():
+def test_verdict_falls_back_for_a_busy_reader_even_when_the_spatial_index_plan_is_missing():
     lab = _lab_with_required_results(
         concurrency=ScenarioResult(
             name="concurrency",
@@ -44,12 +44,12 @@ def test_verdict_falls_back_for_a_busy_reader_even_when_the_rtree_plan_is_missin
                 ("reader_forced_termination", "false"),
                 ("checkpoint", "0,0,0"),
                 ("online_backup_exists", "true"),
-                ("plan_uses_segment_rtree", "false"),
+                ("plan_uses_spatial_index", "false"),
                 ("plan_uses_active_membership", "true"),
             ),
             failures=(
                 "reader error: database is locked",
-                "nearby query plan did not name segment_rtree",
+                "nearby query plan did not use SpatiaLite SpatialIndex",
             ),
         )
     )

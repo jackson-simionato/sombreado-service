@@ -96,9 +96,11 @@ class ScenarioLab:
 
         required_results = tuple(self.state.results[name] for name in _REQUIRED_SCENARIOS)
         if all(result.passed for result in required_results):
-            return Verdict.core_sqlite_credible
+            return Verdict.spatialite_credible
         if behavior_or_performance_failure_is_spatial_only(required_results):
-            return Verdict.prototype_spatialite
+            # SpatiaLite still missed PostGIS nearby parity; prefer revising
+            # application geodesic distance over carrying SpatiaLite packaging.
+            return Verdict.revised_app_distance
         return Verdict.fallback_postgis
 
     def run_behavior(self) -> ScenarioResult:
@@ -469,16 +471,17 @@ class ScenarioLab:
         except Exception as error:
             failures.add(f"nearby query plan inspection failed: {type(error).__name__}: {error}")
         plan_details = tuple(detail for plan in plans for detail in plan)
-        plan_uses_rtree = bool(plans) and all(
-            any("segment_rtree" in detail.lower() for detail in plan) for plan in plans
+        plan_uses_spatial_index = bool(plans) and all(
+            any(token in detail.lower() for detail in plan for token in ("spatialindex", "idx_route_segments_geom"))
+            for plan in plans
         )
         plan_uses_active_membership = bool(plans) and all(
             any("dataset_route_versions" in detail.lower() for detail in plan)
             and any("active_dataset" in detail.lower() for detail in plan)
             for plan in plans
         )
-        if not plan_uses_rtree:
-            failures.add("nearby query plan did not name segment_rtree")
+        if not plan_uses_spatial_index:
+            failures.add("nearby query plan did not use SpatiaLite SpatialIndex")
         if not plan_uses_active_membership:
             failures.add("nearby query plan did not use active generation membership")
 
@@ -501,7 +504,7 @@ class ScenarioLab:
             ("generation_b_digest", expected_b[1]),
             ("checkpoint", _checkpoint_text(checkpoint_result)),
             ("online_backup_exists", str(backup_path.exists()).lower()),
-            ("plan_uses_segment_rtree", str(plan_uses_rtree).lower()),
+            ("plan_uses_spatial_index", str(plan_uses_spatial_index).lower()),
             ("plan_uses_active_membership", str(plan_uses_active_membership).lower()),
             ("plan_details", " | ".join(plan_details)),
         )
@@ -519,7 +522,7 @@ class ScenarioLab:
                 and reader_errors == 0
                 and reader_clean_shutdown
                 and not reader_forced_termination
-                and plan_uses_rtree
+                and plan_uses_spatial_index
                 and plan_uses_active_membership
                 and checkpoint_ok
                 and backup_path.exists()
@@ -709,6 +712,7 @@ class ScenarioLab:
             "fixture_sha256": _FIXTURE_SHA256,
             "reference": _REFERENCE_DESCRIPTION,
             "sqlite_version": sqlite3.sqlite_version,
+            "spatialite_extension": _spatialite_extension_path_safe(),
             "updated_at_utc": datetime.now(UTC).isoformat(),
             "active_generation": self.state.active_generation,
             "staging_generation": self.state.staging_generation,
@@ -767,16 +771,16 @@ def behavior_or_performance_failure_is_spatial_only(
 
     Publication, concurrency-safety, durability, integrity, and recovery
     failures prove that the candidate is not a safe replacement regardless of
-    spatial behavior. The concurrency gate records R*Tree query-plan evidence,
-    but an otherwise-clean R*Tree plan miss is a spatial limitation rather
-    than a publication-safety failure.
+    spatial behavior. The concurrency gate records SpatialIndex query-plan
+    evidence, but an otherwise-clean spatial-index plan miss is a spatial
+    limitation rather than a publication-safety failure.
     """
     results = {result.name: result for result in required_results}
     if set(results) != set(_REQUIRED_SCENARIOS):
         return False
     if not results["publication"].passed or not results["durability"].passed:
         return False
-    if not _concurrency_failure_is_rtree_plan_only(results["concurrency"]):
+    if not _concurrency_failure_is_spatial_index_plan_only(results["concurrency"]):
         return False
 
     behavior = results["behavior"]
@@ -800,14 +804,14 @@ def behavior_or_performance_failure_is_spatial_only(
     return any(not result.passed for result in required_results)
 
 
-def _concurrency_failure_is_rtree_plan_only(result: ScenarioResult) -> bool:
-    """Allow only a clean concurrency probe whose R*Tree plan check failed."""
+def _concurrency_failure_is_spatial_index_plan_only(result: ScenarioResult) -> bool:
+    """Allow only a clean concurrency probe whose SpatialIndex plan check failed."""
     if result.passed:
         return True
 
     facts = dict(result.facts)
     return (
-        facts.get("plan_uses_segment_rtree") == "false"
+        facts.get("plan_uses_spatial_index") == "false"
         and facts.get("plan_uses_active_membership") == "true"
         and _fact_integer(facts, "busy_errors") == 0
         and _fact_integer(facts, "reader_errors") == 0
@@ -819,8 +823,17 @@ def _concurrency_failure_is_rtree_plan_only(result: ScenarioResult) -> bool:
         and facts.get("reader_forced_termination") == "false"
         and facts.get("checkpoint", "").split(",", maxsplit=1)[0] == "0"
         and facts.get("online_backup_exists") == "true"
-        and result.failures == ("nearby query plan did not name segment_rtree",)
+        and result.failures == ("nearby query plan did not use SpatiaLite SpatialIndex",)
     )
+
+
+def _spatialite_extension_path_safe() -> str:
+    try:
+        from .candidate import _spatialite_extension_path
+
+        return _spatialite_extension_path()
+    except Exception as error:
+        return f"unavailable: {type(error).__name__}: {error}"
 
 
 def _fact_integer(facts: dict[str, str], key: str) -> int:
