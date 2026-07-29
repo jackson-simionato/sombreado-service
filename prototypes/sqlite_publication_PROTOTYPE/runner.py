@@ -17,9 +17,10 @@ from .models import LabState, NearbySample, ScenarioResult, Verdict
 from .reference import REFERENCE_DATABASE, REFERENCE_URL, SOURCE_URL, ReferenceAdapter
 from .scenarios import PUBLIC_RADII_METERS, ScenarioLab
 
-TITLE = "SQLite/PostGIS publication decision lab (PROTOTYPE)"
+TITLE = "Revised application geodesic nearby decision lab (PROTOTYPE)"
 QUESTION = (
-    "Can core SQLite preserve browser-visible route reads and atomic dataset publication at the measured workload?"
+    "Can a revised WGS84-local application geodesic on core SQLite WAL + R*Tree "
+    "close PostGIS nearby spatial parity without SpatiaLite?"
 )
 SCENARIOS = ("interactive", "behavior", "publication", "concurrency", "durability", "all")
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "docs/research/fixtures/route-snapshots-2026-07-28.jsonl.gz"

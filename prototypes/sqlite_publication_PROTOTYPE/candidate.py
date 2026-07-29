@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Iterator, TypeAlias
 from uuid import NAMESPACE_URL, uuid5
 
-from .geometry import point_to_segment_meters, search_bounds
+from .geometry import approximate_point_to_segment_meters, point_to_segment_meters, search_bounds
 from .models import BehaviorSnapshot, NearbySample
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
@@ -1202,9 +1202,9 @@ class CandidateAdapter:
             _NEARBY_SQL,
             (max_lng, min_lng, max_lat, min_lat),
         )
-        by_route: dict[str, tuple[str, str, float]] = {}
+        by_route: dict[str, tuple[str, str, float, float, float, float, float]] = {}
         for row in candidates:
-            distance = point_to_segment_meters(
+            approx_distance = approximate_point_to_segment_meters(
                 sample.lat,
                 sample.lng,
                 float(row[3]),
@@ -1214,17 +1214,30 @@ class CandidateAdapter:
             )
             route_id = str(row[0])
             current = by_route.get(route_id)
-            if current is None or distance < current[2]:
-                by_route[route_id] = (str(row[1]), str(row[2]), distance)
+            if current is None or approx_distance < current[2]:
+                by_route[route_id] = (
+                    str(row[1]),
+                    str(row[2]),
+                    approx_distance,
+                    float(row[3]),
+                    float(row[4]),
+                    float(row[5]),
+                    float(row[6]),
+                )
 
-        included = (value for value in by_route.values() if value[2] <= sample.radius_meters)
-        return tuple(
-            (route_code, distance)
-            for route_code, _route_name, distance in sorted(
-                included,
-                key=lambda value: (value[2], value[0], value[1]),
+        refined: list[tuple[str, str, float]] = []
+        for route_code, route_name, _approx, start_lat, start_lng, end_lat, end_lng in by_route.values():
+            distance = point_to_segment_meters(
+                sample.lat,
+                sample.lng,
+                start_lat,
+                start_lng,
+                end_lat,
+                end_lng,
             )
-        )
+            if distance <= sample.radius_meters:
+                refined.append((route_code, route_name, distance))
+        return tuple((route_code, distance) for route_code, _route_name, distance in _order_nearby_rows(refined))
 
     @staticmethod
     def _segment_values(row: Mapping[str, object]) -> tuple[object, ...]:
@@ -1250,6 +1263,29 @@ class CandidateAdapter:
             min(start_lat, end_lat),
             max(start_lat, end_lat),
         )
+
+
+_NEARBY_DISTANCE_TIE_METERS = 2.0
+
+
+def _order_nearby_rows(
+    rows: list[tuple[str, str, float]],
+) -> tuple[tuple[str, str, float], ...]:
+    """Order nearby rows by distance, applying code/name ties inside 2 m bands.
+
+    Matches the reference gate's 2.0 m chain grouping. A ~2 cm GeographicLib vs
+    PostGIS disagreement can still split one long-range chain whose true gap is
+    1.98 m; widening the band merges other reference groups and fails worse.
+    """
+    if not rows:
+        return ()
+    ordered = sorted(rows, key=lambda value: (value[2], value[0], value[1]))
+    groups: list[list[tuple[str, str, float]]] = [[ordered[0]]]
+    for row in ordered[1:]:
+        if row[2] - groups[-1][-1][2] > _NEARBY_DISTANCE_TIE_METERS:
+            groups.append([])
+        groups[-1].append(row)
+    return tuple(row for group in groups for row in sorted(group, key=lambda value: (value[0], value[1])))
 
 
 def _segment_endpoints(geometry: str) -> tuple[float, float, float, float]:

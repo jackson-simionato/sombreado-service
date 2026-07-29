@@ -2,68 +2,62 @@ from prototypes.sqlite_publication_PROTOTYPE.models import LabState, ScenarioRes
 from prototypes.sqlite_publication_PROTOTYPE.scenarios import ScenarioLab
 
 
-def test_verdict_prototypes_spatialite_for_an_isolated_rtree_plan_failure():
+def test_verdict_is_credible_when_every_required_gate_passes():
     lab = _lab_with_required_results(
-        concurrency=ScenarioResult(
-            name="concurrency",
-            passed=False,
-            facts=(
-                ("busy_errors", "0"),
-                ("reader_errors", "0"),
-                ("unknown_digests", "0"),
-                ("mixed_generation_reads", "0"),
-                ("generation_a_observations", "1"),
-                ("generation_b_observations", "1"),
-                ("reader_clean_shutdown", "true"),
-                ("reader_forced_termination", "false"),
-                ("checkpoint", "0,0,0"),
-                ("online_backup_exists", "true"),
-                ("plan_uses_segment_rtree", "false"),
-                ("plan_uses_active_membership", "true"),
-            ),
-            failures=("nearby query plan did not name segment_rtree",),
-        )
+        behavior=ScenarioResult(name="behavior", passed=True, facts=()),
+        concurrency=ScenarioResult(name="concurrency", passed=True, facts=()),
     )
 
-    assert lab.derive_verdict() is Verdict.prototype_spatialite
+    assert lab.derive_verdict() is Verdict.core_sqlite_credible
 
 
-def test_verdict_falls_back_for_a_busy_reader_even_when_the_rtree_plan_is_missing():
+def test_verdict_falls_back_for_spatial_behavior_failure_after_spatialite_rejection():
     lab = _lab_with_required_results(
+        behavior=ScenarioResult(
+            name="behavior",
+            passed=False,
+            facts=(
+                ("non_spatial_mismatches", "0"),
+                ("distance_errors_over_2m", "12"),
+                ("outside_band_differences", "0"),
+                ("order_mismatches", "0"),
+                ("uncategorized_mismatches", "0"),
+            ),
+        ),
+        concurrency=ScenarioResult(name="concurrency", passed=True, facts=()),
+    )
+
+    assert lab.derive_verdict() is Verdict.fallback_postgis
+
+
+def test_verdict_falls_back_for_a_busy_reader():
+    lab = _lab_with_required_results(
+        behavior=ScenarioResult(name="behavior", passed=True, facts=()),
         concurrency=ScenarioResult(
             name="concurrency",
             passed=False,
             facts=(
                 ("busy_errors", "1"),
                 ("reader_errors", "1"),
-                ("unknown_digests", "0"),
-                ("mixed_generation_reads", "0"),
-                ("generation_a_observations", "1"),
-                ("generation_b_observations", "1"),
-                ("reader_clean_shutdown", "true"),
-                ("reader_forced_termination", "false"),
-                ("checkpoint", "0,0,0"),
-                ("online_backup_exists", "true"),
-                ("plan_uses_segment_rtree", "false"),
-                ("plan_uses_active_membership", "true"),
             ),
-            failures=(
-                "reader error: database is locked",
-                "nearby query plan did not name segment_rtree",
-            ),
-        )
+            failures=("reader error: database is locked",),
+        ),
     )
 
     assert lab.derive_verdict() is Verdict.fallback_postgis
 
 
-def _lab_with_required_results(*, concurrency: ScenarioResult) -> ScenarioLab:
+def _lab_with_required_results(
+    *,
+    behavior: ScenarioResult,
+    concurrency: ScenarioResult,
+) -> ScenarioLab:
     return ScenarioLab(
         reference=None,
         candidate=None,
         state=LabState(
             results={
-                "behavior": ScenarioResult(name="behavior", passed=True, facts=()),
+                "behavior": behavior,
                 "publication": ScenarioResult(name="publication", passed=True, facts=()),
                 "concurrency": concurrency,
                 "durability": ScenarioResult(name="durability", passed=True, facts=()),

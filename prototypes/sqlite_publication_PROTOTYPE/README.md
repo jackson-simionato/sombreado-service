@@ -1,8 +1,11 @@
-# SQLite/PostGIS publication decision lab (PROTOTYPE)
+# SQLite revised-application-geodesic decision lab (PROTOTYPE)
 
-This throwaway lab investigates whether core SQLite can preserve
-browser-visible route reads and atomically publish a refreshed route dataset.
-It is decision evidence only: the `prototype/sqlite-geospatial-publication`
+This throwaway lab investigates whether core SQLite WAL + R*Tree, with a
+revised WGS84-local application point-to-segment distance, can close the nearby
+spatial parity gap against PostGIS that
+`prototype/sqlite-geospatial-publication` measured — without SpatiaLite.
+
+It is decision evidence only: the `prototype/revised-app-geodesic-nearby`
 branch and its commits are the primary source, not production code.
 
 ## Isolation
@@ -14,11 +17,14 @@ branch and its commits are the primary source, not production code.
 - SQLite databases and backups are created outside this repository in a fresh
   directory using the `sombreado-sqlite-prototype-` temporary prefix.
 - The reference database requires the sibling scraper's local PostGIS Docker
-  Compose service. The lab never contacts a production URL.
+  Compose service (`CONSORCIO_FENIX_SCRAPER_ROOT` or walk-up sibling search).
+  The lab never contacts a production URL.
+- Do not load SpatiaLite / `mod_spatialite`.
 
 ## Run
 
-From the Sombreado Service repository, start the terminal lab with:
+From the Sombreado Service repository (or this worktree), start the terminal
+lab with:
 
 ```bash
 make prototype-sqlite-publication
@@ -48,15 +54,22 @@ and failures, active generation, SQLite database sizes, query-plan evidence,
 and the provisional verdict. `--run all` always executes all four gates and
 writes complete evidence; it exits zero only if every gate passes.
 
-The verdict is intentionally conservative:
+The automated provisional verdict options for this ticket are:
 
 - all required gates pass: `core-sqlite-credible`;
-- only distance, boundary/inclusion, nearby ordering, or an otherwise-clean
-  R*Tree spatial performance/plan check fails: `prototype-spatialite-next`;
-- any publication, concurrency-safety (reader, lifecycle, checkpoint, or
-  backup), integrity, recovery, or other failure: `fallback-postgis`.
+- any required gate fails: `fallback-postgis`.
 
-For the captured workload the behavioral gate currently fails only spatial
-criteria, while publication, concurrency, and durability pass. The expected
-provisional next experiment is therefore `prototype-spatialite-next`, not a
-claim that core SQLite passed the full prototype.
+SpatiaLite was already rejected; there is no `prototype-spatialite-next`
+outcome on this branch.
+
+## Measured result (HITL)
+
+Against the same fixture and PostGIS reference:
+
+| Gate | Result |
+| --- | --- |
+| behavior | FAIL — 0 distance errors >2 m (max ≈2.8 cm); 0 outside-band; **1** residual order tie-group split (GeographicLib under-reads one ~1.6 km segment by ≈2 cm, turning a 1.98 m PostGIS gap into 2.005 m) |
+| publication / concurrency / durability | pass on this branch (same WAL + R*Tree + generation model as [#31](https://github.com/jackson-simionato/sombreado-service/issues/31)) |
+
+The runner’s provisional verdict stays `fallback-postgis` while behavior fails.
+**HITL verdict: `core-sqlite-credible`.** Distance and inclusion parity are closed without SpatiaLite. The single ordering edge case is accepted for the first centralized architecture; co-located PostGIS remains available if later work needs bit-identical nearby order.

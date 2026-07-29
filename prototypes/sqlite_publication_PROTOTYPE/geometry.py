@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from math import asin, cos, radians, sin, sqrt
+from math import cos, pi, radians, sin, sqrt
 
-EARTH_RADIUS_METERS = 6_371_008.8
+from geographiclib.geodesic import Geodesic
+
+# WGS84 ellipsoid — same spheroid PostGIS geography uses by default.
+_WGS84_A = 6_378_137.0
+_WGS84_F = 1.0 / 298.257223563
+_WGS84_E2 = _WGS84_F * (2.0 - _WGS84_F)
+_GEODESIC = Geodesic.WGS84
 
 
 def point_to_segment_meters(
@@ -15,25 +21,57 @@ def point_to_segment_meters(
     end_lat: float,
     end_lng: float,
 ) -> float:
-    """Return Haversine distance to a locally projected segment."""
-    longitude_scale = cos(radians(lat))
-    start_x = radians(start_lng - lng) * longitude_scale * EARTH_RADIUS_METERS
-    start_y = radians(start_lat - lat) * EARTH_RADIUS_METERS
-    end_x = radians(end_lng - lng) * longitude_scale * EARTH_RADIUS_METERS
-    end_y = radians(end_lat - lat) * EARTH_RADIUS_METERS
+    """Return WGS84 geography-equivalent meters to a segment.
 
-    segment_x = end_x - start_x
-    segment_y = end_y - start_y
-    segment_length_squared = segment_x * segment_x + segment_y * segment_y
+    Uses a fast ellipsoid-local planar projection to find the closest point,
+    then one GeographicLib Inverse for the reported distance so PostGIS
+    geography ordering tie-bands stay stable.
+    """
+    meters_per_deg_lat, meters_per_deg_lng = _meters_per_degree(lat)
+    start_east = (start_lng - lng) * meters_per_deg_lng
+    start_north = (start_lat - lat) * meters_per_deg_lat
+    end_east = (end_lng - lng) * meters_per_deg_lng
+    end_north = (end_lat - lat) * meters_per_deg_lat
+
+    segment_east = end_east - start_east
+    segment_north = end_north - start_north
+    segment_length_squared = segment_east * segment_east + segment_north * segment_north
     if segment_length_squared == 0.0:
-        projection = 0.0
-    else:
-        projection = -(start_x * segment_x + start_y * segment_y) / segment_length_squared
-        projection = min(max(projection, 0.0), 1.0)
+        return float(_GEODESIC.Inverse(lat, lng, start_lat, start_lng)["s12"])
 
-    projected_lat = start_lat + projection * (end_lat - start_lat)
-    projected_lng = start_lng + projection * (end_lng - start_lng)
-    return _haversine_meters(lat, lng, projected_lat, projected_lng)
+    projection = -(start_east * segment_east + start_north * segment_north) / segment_length_squared
+    projection = min(max(projection, 0.0), 1.0)
+    closest_lat = start_lat + projection * (end_lat - start_lat)
+    closest_lng = start_lng + projection * (end_lng - start_lng)
+    return float(_GEODESIC.Inverse(lat, lng, closest_lat, closest_lng)["s12"])
+
+
+def approximate_point_to_segment_meters(
+    lat: float,
+    lng: float,
+    start_lat: float,
+    start_lng: float,
+    end_lat: float,
+    end_lng: float,
+) -> float:
+    """Return fast WGS84-local planar meters for candidate ranking only."""
+    meters_per_deg_lat, meters_per_deg_lng = _meters_per_degree(lat)
+    start_east = (start_lng - lng) * meters_per_deg_lng
+    start_north = (start_lat - lat) * meters_per_deg_lat
+    end_east = (end_lng - lng) * meters_per_deg_lng
+    end_north = (end_lat - lat) * meters_per_deg_lat
+
+    segment_east = end_east - start_east
+    segment_north = end_north - start_north
+    segment_length_squared = segment_east * segment_east + segment_north * segment_north
+    if segment_length_squared == 0.0:
+        return sqrt(start_east * start_east + start_north * start_north)
+
+    projection = -(start_east * segment_east + start_north * segment_north) / segment_length_squared
+    projection = min(max(projection, 0.0), 1.0)
+    closest_east = start_east + projection * segment_east
+    closest_north = start_north + projection * segment_north
+    return sqrt(closest_east * closest_east + closest_north * closest_north)
 
 
 def search_bounds(
@@ -41,21 +79,20 @@ def search_bounds(
     lng: float,
     radius_meters: float,
 ) -> tuple[float, float, float, float]:
-    """Return longitude and latitude bounds for an R*Tree candidate search."""
-    lat_delta = radius_meters / 111_320.0
-    lng_delta = radius_meters / (111_320.0 * max(cos(radians(lat)), 0.01))
+    """Return longitude and latitude bounds for an R*Tree candidate search.
+
+    Pads the radius slightly so geography edge cases near the exact radius are
+    not dropped by the equirectangular bounding box before exact distance runs.
+    """
+    padded_radius = radius_meters + 25.0
+    lat_delta = padded_radius / 111_320.0
+    lng_delta = padded_radius / (111_320.0 * max(cos(radians(lat)), 0.01))
     return lng - lng_delta, lng + lng_delta, lat - lat_delta, lat + lat_delta
 
 
-def _haversine_meters(
-    start_lat: float,
-    start_lng: float,
-    end_lat: float,
-    end_lng: float,
-) -> float:
-    lat_delta = radians(end_lat - start_lat)
-    lng_delta = radians(end_lng - start_lng)
-    start_lat_radians = radians(start_lat)
-    end_lat_radians = radians(end_lat)
-    haversine = sin(lat_delta / 2.0) ** 2 + (cos(start_lat_radians) * cos(end_lat_radians) * sin(lng_delta / 2.0) ** 2)
-    return 2.0 * EARTH_RADIUS_METERS * asin(sqrt(min(1.0, haversine)))
+def _meters_per_degree(lat: float) -> tuple[float, float]:
+    lat_radians = radians(lat)
+    sin_lat = sin(lat_radians)
+    prime_vertical = _WGS84_A / sqrt(1.0 - _WGS84_E2 * sin_lat * sin_lat)
+    meridional = _WGS84_A * (1.0 - _WGS84_E2) / (1.0 - _WGS84_E2 * sin_lat * sin_lat) ** 1.5
+    return meridional * pi / 180.0, prime_vertical * cos(lat_radians) * pi / 180.0

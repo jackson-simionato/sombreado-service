@@ -8,7 +8,6 @@ from pathlib import Path
 class Verdict(StrEnum):
     pending = "pending"
     core_sqlite_credible = "core-sqlite-credible"
-    prototype_spatialite = "prototype-spatialite-next"
     fallback_postgis = "fallback-postgis"
 
 

@@ -97,8 +97,6 @@ class ScenarioLab:
         required_results = tuple(self.state.results[name] for name in _REQUIRED_SCENARIOS)
         if all(result.passed for result in required_results):
             return Verdict.core_sqlite_credible
-        if behavior_or_performance_failure_is_spatial_only(required_results):
-            return Verdict.prototype_spatialite
         return Verdict.fallback_postgis
 
     def run_behavior(self) -> ScenarioResult:
@@ -758,76 +756,6 @@ class ScenarioLab:
     def _reset_to_generation_a(self, rows: CanonicalRows) -> None:
         self.candidate.reset()
         _publish_generation(self.candidate, "generation-a", rows)
-
-
-def behavior_or_performance_failure_is_spatial_only(
-    required_results: tuple[ScenarioResult, ...],
-) -> bool:
-    """Return whether the only failed required gates are spatial limitations.
-
-    Publication, concurrency-safety, durability, integrity, and recovery
-    failures prove that the candidate is not a safe replacement regardless of
-    spatial behavior. The concurrency gate records R*Tree query-plan evidence,
-    but an otherwise-clean R*Tree plan miss is a spatial limitation rather
-    than a publication-safety failure.
-    """
-    results = {result.name: result for result in required_results}
-    if set(results) != set(_REQUIRED_SCENARIOS):
-        return False
-    if not results["publication"].passed or not results["durability"].passed:
-        return False
-    if not _concurrency_failure_is_rtree_plan_only(results["concurrency"]):
-        return False
-
-    behavior = results["behavior"]
-    behavior_facts = dict(behavior.facts)
-    if not behavior.passed:
-        spatial_failures = sum(
-            _fact_integer(behavior_facts, key)
-            for key in (
-                "distance_errors_over_2m",
-                "outside_band_differences",
-                "order_mismatches",
-            )
-        )
-        if (
-            _fact_integer(behavior_facts, "non_spatial_mismatches") != 0
-            or _fact_integer(behavior_facts, "uncategorized_mismatches") != 0
-            or spatial_failures == 0
-        ):
-            return False
-
-    return any(not result.passed for result in required_results)
-
-
-def _concurrency_failure_is_rtree_plan_only(result: ScenarioResult) -> bool:
-    """Allow only a clean concurrency probe whose R*Tree plan check failed."""
-    if result.passed:
-        return True
-
-    facts = dict(result.facts)
-    return (
-        facts.get("plan_uses_segment_rtree") == "false"
-        and facts.get("plan_uses_active_membership") == "true"
-        and _fact_integer(facts, "busy_errors") == 0
-        and _fact_integer(facts, "reader_errors") == 0
-        and _fact_integer(facts, "unknown_digests") == 0
-        and _fact_integer(facts, "mixed_generation_reads") == 0
-        and _fact_integer(facts, "generation_a_observations") > 0
-        and _fact_integer(facts, "generation_b_observations") > 0
-        and facts.get("reader_clean_shutdown") == "true"
-        and facts.get("reader_forced_termination") == "false"
-        and facts.get("checkpoint", "").split(",", maxsplit=1)[0] == "0"
-        and facts.get("online_backup_exists") == "true"
-        and result.failures == ("nearby query plan did not name segment_rtree",)
-    )
-
-
-def _fact_integer(facts: dict[str, str], key: str) -> int:
-    try:
-        return int(facts.get(key, "0"))
-    except ValueError:
-        return -1
 
 
 def _database_sizes(directory: Path) -> dict[str, int]:
