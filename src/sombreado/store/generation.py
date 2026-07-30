@@ -10,15 +10,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterator, TypeAlias
 
+from alembic import command
+from alembic.config import Config
+
 from sombreado.store.geodesic import (
     approximate_point_to_segment_meters,
     order_nearby_rows,
     point_to_segment_meters,
     search_bounds,
 )
-from sombreado.store.migrate import upgrade_generation_store
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ALEMBIC_INI = _REPO_ROOT / "alembic.ini"
 
 _TABLES = (
     "routes",
@@ -73,7 +78,10 @@ class GenerationStore:
 
     def migrate(self) -> None:
         """Apply Alembic versioned migrations up to head for this database."""
-        upgrade_generation_store(self.database_path)
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        config = Config(str(_ALEMBIC_INI))
+        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.database_path.resolve()}")
+        command.upgrade(config, "head")
 
     def claim_scrape_lease(self, holder_id: str, *, ttl_seconds: int = 1200) -> None:
         """Claim the singleton scrape lease with BEGIN IMMEDIATE, or fail fast.
