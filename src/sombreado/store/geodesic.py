@@ -28,22 +28,10 @@ def point_to_segment_meters(
     then one GeographicLib Inverse for the reported distance so PostGIS
     geography ordering tie-bands stay stable.
     """
-    meters_per_deg_lat, meters_per_deg_lng = _meters_per_degree(lat)
-    start_east = (start_lng - lng) * meters_per_deg_lng
-    start_north = (start_lat - lat) * meters_per_deg_lat
-    end_east = (end_lng - lng) * meters_per_deg_lng
-    end_north = (end_lat - lat) * meters_per_deg_lat
-
-    segment_east = end_east - start_east
-    segment_north = end_north - start_north
-    segment_length_squared = segment_east * segment_east + segment_north * segment_north
-    if segment_length_squared == 0.0:
+    foot = _local_segment_foot(lat, lng, start_lat, start_lng, end_lat, end_lng)
+    if foot is None:
         return float(_GEODESIC.Inverse(lat, lng, start_lat, start_lng)["s12"])
-
-    projection = -(start_east * segment_east + start_north * segment_north) / segment_length_squared
-    projection = min(max(projection, 0.0), 1.0)
-    closest_lat = start_lat + projection * (end_lat - start_lat)
-    closest_lng = start_lng + projection * (end_lng - start_lng)
+    _projection, closest_lat, closest_lng, _east, _north = foot
     return float(_GEODESIC.Inverse(lat, lng, closest_lat, closest_lng)["s12"])
 
 
@@ -56,22 +44,13 @@ def approximate_point_to_segment_meters(
     end_lng: float,
 ) -> float:
     """Return fast WGS84-local planar meters for candidate ranking only."""
-    meters_per_deg_lat, meters_per_deg_lng = _meters_per_degree(lat)
-    start_east = (start_lng - lng) * meters_per_deg_lng
-    start_north = (start_lat - lat) * meters_per_deg_lat
-    end_east = (end_lng - lng) * meters_per_deg_lng
-    end_north = (end_lat - lat) * meters_per_deg_lat
-
-    segment_east = end_east - start_east
-    segment_north = end_north - start_north
-    segment_length_squared = segment_east * segment_east + segment_north * segment_north
-    if segment_length_squared == 0.0:
+    foot = _local_segment_foot(lat, lng, start_lat, start_lng, end_lat, end_lng)
+    if foot is None:
+        meters_per_deg_lat, meters_per_deg_lng = _meters_per_degree(lat)
+        start_east = (start_lng - lng) * meters_per_deg_lng
+        start_north = (start_lat - lat) * meters_per_deg_lat
         return sqrt(start_east * start_east + start_north * start_north)
-
-    projection = -(start_east * segment_east + start_north * segment_north) / segment_length_squared
-    projection = min(max(projection, 0.0), 1.0)
-    closest_east = start_east + projection * segment_east
-    closest_north = start_north + projection * segment_north
+    _projection, _closest_lat, _closest_lng, closest_east, closest_north = foot
     return sqrt(closest_east * closest_east + closest_north * closest_north)
 
 
@@ -100,6 +79,40 @@ def order_nearby_rows(
             groups.append([])
         groups[-1].append(row)
     return tuple(row for group in groups for row in sorted(group, key=lambda value: (value[0], value[1])))
+
+
+def _local_segment_foot(
+    lat: float,
+    lng: float,
+    start_lat: float,
+    start_lng: float,
+    end_lat: float,
+    end_lng: float,
+) -> tuple[float, float, float, float, float] | None:
+    """Project the query point onto the segment in a local WGS84 tangent plane.
+
+    Returns ``(projection, closest_lat, closest_lng, closest_east, closest_north)``
+    or ``None`` when the segment is zero-length.
+    """
+    meters_per_deg_lat, meters_per_deg_lng = _meters_per_degree(lat)
+    start_east = (start_lng - lng) * meters_per_deg_lng
+    start_north = (start_lat - lat) * meters_per_deg_lat
+    end_east = (end_lng - lng) * meters_per_deg_lng
+    end_north = (end_lat - lat) * meters_per_deg_lat
+
+    segment_east = end_east - start_east
+    segment_north = end_north - start_north
+    segment_length_squared = segment_east * segment_east + segment_north * segment_north
+    if segment_length_squared == 0.0:
+        return None
+
+    projection = -(start_east * segment_east + start_north * segment_north) / segment_length_squared
+    projection = min(max(projection, 0.0), 1.0)
+    closest_lat = start_lat + projection * (end_lat - start_lat)
+    closest_lng = start_lng + projection * (end_lng - start_lng)
+    closest_east = start_east + projection * segment_east
+    closest_north = start_north + projection * segment_north
+    return projection, closest_lat, closest_lng, closest_east, closest_north
 
 
 def _meters_per_degree(lat: float) -> tuple[float, float]:
