@@ -16,6 +16,7 @@ from sombreado.store.geodesic import (
     point_to_segment_meters,
     search_bounds,
 )
+from sombreado.store.migrate import upgrade_generation_store
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
 
@@ -26,130 +27,6 @@ _TABLES = (
     "service_directions",
     "route_segments",
 )
-
-_SCHEMA = """
-BEGIN IMMEDIATE;
-
-CREATE TABLE IF NOT EXISTS routes (
-    id TEXT PRIMARY KEY,
-    code TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    slug TEXT NOT NULL,
-    category TEXT,
-    fare_region TEXT,
-    last_changed TEXT,
-    is_current INTEGER NOT NULL CHECK (is_current IN (0, 1))
-);
-
-CREATE TABLE IF NOT EXISTS route_versions (
-    id TEXT PRIMARY KEY,
-    route_id TEXT NOT NULL REFERENCES routes(id),
-    source_hash TEXT NOT NULL,
-    map_hash TEXT,
-    page_url TEXT NOT NULL,
-    map_url TEXT,
-    is_current INTEGER NOT NULL CHECK (is_current IN (0, 1))
-);
-
-CREATE TABLE IF NOT EXISTS route_directions (
-    id TEXT PRIMARY KEY,
-    route_version_id TEXT NOT NULL REFERENCES route_versions(id),
-    name TEXT NOT NULL,
-    direction_kind TEXT,
-    sequence INTEGER NOT NULL,
-    geometry TEXT NOT NULL,
-    UNIQUE (route_version_id, sequence)
-);
-
-CREATE TABLE IF NOT EXISTS service_directions (
-    id TEXT PRIMARY KEY,
-    route_version_id TEXT NOT NULL REFERENCES route_versions(id),
-    route_direction_id TEXT REFERENCES route_directions(id),
-    sequence INTEGER NOT NULL,
-    departure_label TEXT NOT NULL,
-    normalized_name TEXT,
-    direction_kind TEXT,
-    confidence TEXT NOT NULL,
-    method TEXT NOT NULL,
-    notes TEXT NOT NULL,
-    UNIQUE (route_version_id, departure_label)
-);
-
-CREATE TABLE IF NOT EXISTS route_segments (
-    segment_rowid INTEGER PRIMARY KEY,
-    public_id TEXT NOT NULL UNIQUE,
-    route_version_id TEXT NOT NULL REFERENCES route_versions(id),
-    route_direction_id TEXT NOT NULL REFERENCES route_directions(id),
-    sequence INTEGER NOT NULL,
-    source_segment_sequence INTEGER NOT NULL,
-    source_fraction_start REAL NOT NULL,
-    source_fraction_end REAL NOT NULL,
-    geometry TEXT NOT NULL,
-    bearing_degrees REAL NOT NULL,
-    distance_meters REAL NOT NULL,
-    cumulative_distance_meters REAL NOT NULL,
-    start_lng REAL NOT NULL,
-    start_lat REAL NOT NULL,
-    end_lng REAL NOT NULL,
-    end_lat REAL NOT NULL,
-    min_lng REAL NOT NULL,
-    max_lng REAL NOT NULL,
-    min_lat REAL NOT NULL,
-    max_lat REAL NOT NULL,
-    UNIQUE (route_version_id, route_direction_id, sequence)
-);
-
-CREATE TABLE IF NOT EXISTS dataset_generations (
-    id TEXT PRIMARY KEY,
-    status TEXT NOT NULL CHECK (status IN ('staging', 'validated', 'published')),
-    created_at TEXT NOT NULL,
-    validated_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS dataset_route_versions (
-    generation_id TEXT NOT NULL REFERENCES dataset_generations(id),
-    route_id TEXT NOT NULL REFERENCES routes(id),
-    route_version_id TEXT NOT NULL REFERENCES route_versions(id),
-    PRIMARY KEY (generation_id, route_id),
-    UNIQUE (generation_id, route_version_id)
-);
-
-CREATE TABLE IF NOT EXISTS dataset_generation_counts (
-    generation_id TEXT PRIMARY KEY REFERENCES dataset_generations(id),
-    route_versions INTEGER NOT NULL,
-    route_directions INTEGER NOT NULL,
-    service_directions INTEGER NOT NULL,
-    route_segments INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dataset_pointers (
-    role TEXT PRIMARY KEY CHECK (role IN ('current', 'previous')),
-    generation_id TEXT NOT NULL REFERENCES dataset_generations(id)
-);
-
-CREATE TABLE IF NOT EXISTS scrape_lease (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    holder_id TEXT NOT NULL,
-    claimed_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS segment_rtree
-USING rtree(segment_rowid, min_lng, max_lng, min_lat, max_lat);
-
-CREATE INDEX IF NOT EXISTS route_versions_route_id_idx
-ON route_versions(route_id);
-CREATE INDEX IF NOT EXISTS route_directions_version_sequence_idx
-ON route_directions(route_version_id, sequence);
-CREATE INDEX IF NOT EXISTS service_directions_direction_sequence_idx
-ON service_directions(route_direction_id, sequence);
-CREATE INDEX IF NOT EXISTS route_segments_version_direction_sequence_idx
-ON route_segments(route_version_id, route_direction_id, sequence);
-CREATE INDEX IF NOT EXISTS dataset_route_versions_version_idx
-ON dataset_route_versions(route_version_id);
-
-COMMIT;
-"""
 
 _NEARBY_SQL = """
     SELECT
@@ -195,10 +72,8 @@ class GenerationStore:
         self.database_path = Path(database_path)
 
     def migrate(self) -> None:
-        """Create the service-owned schema if missing."""
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.executescript(_SCHEMA)
+        """Apply Alembic versioned migrations up to head for this database."""
+        upgrade_generation_store(self.database_path)
 
     def claim_scrape_lease(self, holder_id: str, *, ttl_seconds: int = 1200) -> None:
         """Claim the singleton scrape lease with BEGIN IMMEDIATE, or fail fast.

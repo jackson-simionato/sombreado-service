@@ -39,6 +39,12 @@ Installable code lives under `src/sombreado/` with two process entry points:
 | API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (still reads Current Route Data from the Scraper Database via the Reader Database Role) |
 | Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Consórcio scrape stub; `publish-fixture` demos the SQLite generation store |
 
+SQLite Generation Store schema is versioned with Alembic under `src/sombreado/store/migrations/`. `GenerationStore.migrate()` (and `publish-fixture`) run `alembic upgrade head`. For the CLI:
+
+```bash
+SQLITE_DATABASE_PATH=data/sombreado.sqlite uv run alembic upgrade head
+```
+
 Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion` (stub), plus shared `config`, `logging`, and `domain`.
 
 ## Configuration
