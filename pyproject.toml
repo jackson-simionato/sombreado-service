@@ -9,6 +9,7 @@ dependencies = [
     "astral>=3.2",
     "asyncpg>=0.30.0",
     "beautifulsoup4>=4.15.0",
+    "boto3>=1.43.60",
     "fastapi>=0.115.0",
     "geoalchemy2>=0.15.0",
     "geographiclib>=2.1",
