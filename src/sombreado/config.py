@@ -1,8 +1,15 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from sombreado.store.object_storage import (
+    DirectoryObjectStorage,
+    ObjectStorage,
+    S3CompatibleObjectStorage,
+)
 
 
 class Settings(BaseSettings):
@@ -21,6 +28,18 @@ class Settings(BaseSettings):
     route_candidate_search_limit: int = 8
     off_route_threshold_meters: float = 75
     nominal_bus_speed_kmh: float = 18
+
+    object_storage_backend: Literal["directory", "s3"] = "directory"
+    object_storage_directory: Path = Path("data/object-storage")
+    object_storage_s3_endpoint: str = ""
+    object_storage_s3_bucket: str = ""
+    object_storage_s3_access_key: str = ""
+    object_storage_s3_secret_key: str = ""
+    object_storage_s3_region: str = "sa-saopaulo-1"
+    backup_work_dir: Path = Path("data/backup-work")
+    backup_aside_dir: Path = Path("data/backup-aside")
+    backup_retain: int = 7
+    backup_key_prefix: str = "sombreado-routes"
 
     @field_validator("database_url")
     @classmethod
@@ -45,6 +64,43 @@ class Settings(BaseSettings):
             raise ValueError("SQLITE_DATABASE_PATH must be non-empty for the scrape CLI")
         return self
 
+    def require_backup(self) -> "Settings":
+        """Validate settings required by backup/restore commands."""
+        self.require_cli()
+        if self.backup_retain < 1:
+            raise ValueError("BACKUP_RETAIN must be >= 1")
+        if not self.backup_key_prefix.strip():
+            raise ValueError("BACKUP_KEY_PREFIX must be non-empty")
+        if self.object_storage_backend == "directory":
+            if not str(self.object_storage_directory).strip():
+                raise ValueError("OBJECT_STORAGE_DIRECTORY must be non-empty for directory backend")
+        elif self.object_storage_backend == "s3":
+            missing = [
+                name
+                for name, value in (
+                    ("OBJECT_STORAGE_S3_ENDPOINT", self.object_storage_s3_endpoint),
+                    ("OBJECT_STORAGE_S3_BUCKET", self.object_storage_s3_bucket),
+                    ("OBJECT_STORAGE_S3_ACCESS_KEY", self.object_storage_s3_access_key),
+                    ("OBJECT_STORAGE_S3_SECRET_KEY", self.object_storage_s3_secret_key),
+                )
+                if not value.strip()
+            ]
+            if missing:
+                raise ValueError(f"s3 object storage requires {', '.join(missing)}")
+        return self
+
+    def build_object_storage(self) -> ObjectStorage:
+        """Construct the configured Object Storage backend."""
+        if self.object_storage_backend == "directory":
+            return DirectoryObjectStorage(self.object_storage_directory)
+        return S3CompatibleObjectStorage(
+            bucket=self.object_storage_s3_bucket,
+            endpoint_url=self.object_storage_s3_endpoint,
+            access_key=self.object_storage_s3_access_key,
+            secret_key=self.object_storage_s3_secret_key,
+            region=self.object_storage_s3_region,
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -57,3 +113,7 @@ def get_api_settings() -> Settings:
 
 def get_cli_settings() -> Settings:
     return Settings().require_cli()
+
+
+def get_backup_settings() -> Settings:
+    return Settings().require_backup()

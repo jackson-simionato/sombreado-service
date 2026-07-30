@@ -37,13 +37,13 @@ Installable code lives under `src/sombreado/` with two process entry points:
 | Entry | How to run | Role |
 | --- | --- | --- |
 | API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (still reads Current Route Data from the Scraper Database via the Reader Database Role) |
-| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Consórcio scrape stub; `publish-fixture` demos the SQLite generation store |
+| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Live Consórcio scrape; `publish-fixture` demos the store; `backup` / `restore` manage Generation Store Backup |
 
 SQLite Generation Store schema is versioned with Alembic under `migrations/`. Migrations apply automatically on deploy/startup:
 
 - Docker entrypoint (`scripts/docker-entrypoint.sh`) runs `GenerationStore.migrate()` before uvicorn
 - API process lifespan migrates on boot (covers `make start`)
-- Scrape CLI migrates in its root callback before any command
+- Scrape / publish-fixture / post-restore CLI paths migrate before use
 
 Manual upgrade when needed:
 
@@ -51,7 +51,24 @@ Manual upgrade when needed:
 SQLITE_DATABASE_PATH=data/sombreado.sqlite uv run alembic upgrade head
 ```
 
-Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion` (stub), plus shared `config`, `logging`, and `domain`.
+### Generation Store backup and restore
+
+Daily offline-independent backups use SQLite’s online backup API, `PRAGMA integrity_check` on the backup file, then upload to Object Storage (retain last 7 successful uploads). The backup job also runs `PRAGMA quick_check` on the live DB and logs an `ALERT` on failure. Backup failure does **not** gate scrape publish or stop the API.
+
+```bash
+# Local drill (directory stand-in for Object Storage)
+OBJECT_STORAGE_BACKEND=directory \
+OBJECT_STORAGE_DIRECTORY=data/object-storage \
+sombreado-scrape backup
+
+# Aside-and-restore from the newest integrity-checked object
+# Stop API + scrape timer first in production.
+sombreado-scrape restore
+```
+
+Production uses Oracle Object Storage via the S3 Compatibility API (`OBJECT_STORAGE_BACKEND=s3` plus endpoint/bucket/keys). If no usable backup exists, start empty and run a fresh scrape for the first validated current generation.
+
+Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion`, plus shared `config`, `logging`, and `domain`.
 
 ## Configuration
 
