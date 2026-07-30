@@ -9,12 +9,16 @@ The installable backend package with two process entry points: the passenger-fac
 _Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
 
 **Scrape CLI**:
-The separate OS-process entry point that fetches Consórcio Fênix data, validates a staged **Dataset Generation**, and publishes into the **Generation Store** under the production operating policy (lease, absence-vs-hard-failure, one retry). It can also publish fixture generations for demos.
+The separate OS-process entry point that fetches Consórcio Fênix data, validates a staged **Dataset Generation**, and publishes into the **Generation Store** under the production operating policy (lease, absence-vs-hard-failure, one retry). It can also publish fixture generations for demos, and run **Generation Store Backup** / aside-and-restore jobs independent of publish.
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Generation Store**:
 The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Not yet the passenger API read path.
 _Avoid_: Scraper Database, app database, SpatiaLite
+
+**Generation Store Backup**:
+An offline-independent copy of the **Generation Store** produced by SQLite’s online backup API, integrity-checked, then stored in Object Storage (retain last 7 successful uploads). Backup failure alerts operators but must not gate scrape publish or stop the API.
+_Avoid_: Cold copy of db+WAL, SQL dump, on-VM-only copies as recovery source of truth
 
 **Dataset Generation**:
 One complete scrape/fixture snapshot in the **Generation Store**, addressed by generation id. Roles are staging (in-flight), current (passenger-visible pointer), and previous (immediate prior current).
@@ -121,6 +125,8 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
 - Until cutover, the API consumes the **Scraper Database** through the **Reader Database Role**.
 - The **Scrape CLI** owns live Consórcio fetch, migrate, and publish against the **Generation Store**; passenger API reads do not use it yet.
+- A **Generation Store Backup** job is independent of scrape publish; failure alerts without blocking publish or API availability.
+- Aside-and-restore installs the newest integrity-checked **Generation Store Backup** object after moving a bad live file aside; a fresh scrape is used only when no usable backup exists.
 - A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
 - Incomplete staging never auto-publishes; failure retains the last successful current (+ previous when present).
 - A **Reader Database Role** must not mutate scraper-owned route data.
