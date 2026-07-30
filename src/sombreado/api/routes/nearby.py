@@ -3,13 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_session
-from app.errors import PublicApiError, parse_public_uuid
-from app.schemas import (
+from sombreado.api.deps import get_session
+from sombreado.api.errors import PublicApiError, parse_public_uuid
+from sombreado.api.schemas import (
     RouteDirectionsResponse,
     RouteGeometryResponse,
 )
-from app.services.routes import RouteReadService, flatten_route_polyline
+from sombreado.route_reads.service import RouteReadService, flatten_route_polyline
 
 router = APIRouter(prefix="/v1", tags=["routes"])
 

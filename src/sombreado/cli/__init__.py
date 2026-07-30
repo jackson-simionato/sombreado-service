@@ -1,0 +1,1 @@
+"""Scrape CLI entry point."""

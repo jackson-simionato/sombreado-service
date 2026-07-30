@@ -1,6 +1,6 @@
 import pytest
 
-from app import db
+from sombreado.store import db
 
 
 class FakeSessionContext:

@@ -1,5 +1,5 @@
-from app.schemas import RouteSegment
-from app.services.projection import project_location_to_segments, segments_after_projection
+from sombreado.advice.projection import project_location_to_segments, segments_after_projection
+from sombreado.domain.schemas import RouteSegment
 
 
 def test_project_location_to_segments_returns_nearest_segment_position():

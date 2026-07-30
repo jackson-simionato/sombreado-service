@@ -1,1 +1,0 @@
-"""Sombreado service application package."""

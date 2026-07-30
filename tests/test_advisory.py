@@ -3,9 +3,10 @@ from uuid import UUID
 
 import pytest
 
-from app.config import Settings
-from app.errors import PublicApiError
-from app.schemas import (
+from sombreado.advice.service import AdvisoryService
+from sombreado.config import Settings
+from sombreado.domain.errors import PublicApiError
+from sombreado.domain.schemas import (
     AdviceComputationRequest,
     AdviceHorizon,
     AdviceLocation,
@@ -14,7 +15,6 @@ from app.schemas import (
     OnboardAdvisoryRequest,
     RouteSegment,
 )
-from app.services.advisory import AdvisoryService
 
 ROUTE_ID = UUID("00000000-0000-0000-0000-000000000001")
 ROUTE_VERSION_ID = UUID("00000000-0000-0000-0000-000000000002")
@@ -167,7 +167,7 @@ async def test_preview_advice_anchors_at_direction_start_and_returns_remaining_r
     service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
 
     monkeypatch.setattr(
-        "app.services.advisory.sun_position",
+        "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 45, "elevation": 35})(),
     )
 
@@ -216,7 +216,7 @@ async def test_preview_advice_upcoming_horizon_uses_internal_15_minute_distance_
             type("Sun", (), {"azimuth": 135, "elevation": 35})(),
         ]
     )
-    monkeypatch.setattr("app.services.advisory.sun_position", lambda *, lat, lng, dt: next(sun_samples))
+    monkeypatch.setattr("sombreado.advice.service.sun_position", lambda *, lat, lng, dt: next(sun_samples))
 
     response = await service.build_advice(_advice_request(horizon=AdviceHorizon.upcoming))
 
@@ -228,7 +228,7 @@ async def test_preview_advice_upcoming_horizon_uses_internal_15_minute_distance_
 async def test_preview_advice_shorter_than_upcoming_window_still_returns_advice(monkeypatch):
     service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings(nominal_bus_speed_kmh=18))
     monkeypatch.setattr(
-        "app.services.advisory.sun_position",
+        "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 135, "elevation": 35})(),
     )
 
@@ -310,7 +310,7 @@ async def test_preview_advice_returns_success_for_night_overhead_and_low_sun(
 ):
     service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
     monkeypatch.setattr(
-        "app.services.advisory.sun_position",
+        "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": sun_azimuth, "elevation": sun_elevation})(),
     )
 
@@ -324,7 +324,7 @@ async def test_preview_advice_returns_success_for_night_overhead_and_low_sun(
 async def test_onboard_advice_projects_live_location_and_returns_requested_horizon(monkeypatch):
     service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
     monkeypatch.setattr(
-        "app.services.advisory.sun_position",
+        "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 45, "elevation": 35})(),
     )
 
@@ -363,7 +363,7 @@ async def test_onboard_advice_off_route_fallback_returns_preview_with_requested_
         settings=Settings(off_route_threshold_meters=75),
     )
     monkeypatch.setattr(
-        "app.services.advisory.sun_position",
+        "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 45, "elevation": 35})(),
     )
 

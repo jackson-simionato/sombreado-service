@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.schemas import (
+from sombreado.domain.schemas import (
     ExposureDirection,
     ExposureWindow,
     RecommendedSeatArea,

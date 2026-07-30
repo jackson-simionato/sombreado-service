@@ -3,17 +3,17 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings_dependency
-from app.db import get_session
-from app.errors import PublicApiError, parse_public_uuid
-from app.schemas import (
+from sombreado.advice.service import AdvisoryService
+from sombreado.api.deps import get_session, get_settings_dependency
+from sombreado.api.errors import PublicApiError, parse_public_uuid
+from sombreado.api.schemas import (
     AdviceComputationRequest,
     AdviceMode,
     AdviceRequest,
     AdviceResponse,
 )
-from app.services.advisory import AdvisoryService
-from app.services.routes import RouteReadService
+from sombreado.config import Settings
+from sombreado.route_reads.service import RouteReadService
 
 router = APIRouter(prefix="/v1", tags=["advisory"])
 

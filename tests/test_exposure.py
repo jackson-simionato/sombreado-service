@@ -2,9 +2,15 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas import ExposureDirection, RecommendedSeatArea, SegmentForAdvisory, SunCondition, SunPosition
-from app.services import exposure
-from app.services.exposure import exposure_direction, summarize_exposure_window, window_distance_meters
+from sombreado.advice import exposure
+from sombreado.advice.exposure import exposure_direction, summarize_exposure_window, window_distance_meters
+from sombreado.domain.schemas import (
+    ExposureDirection,
+    RecommendedSeatArea,
+    SegmentForAdvisory,
+    SunCondition,
+    SunPosition,
+)
 
 
 @pytest.mark.parametrize(

@@ -5,9 +5,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.logging import get_logger
+from sombreado.domain.errors import PublicApiError
+from sombreado.logging import get_logger
 
 logger = get_logger(__name__)
+
+__all__ = [
+    "PublicApiError",
+    "parse_public_uuid",
+    "public_api_error_handler",
+    "public_error_response",
+    "unexpected_public_error_handler",
+    "validation_exception_handler",
+]
 
 
 class PublicError(BaseModel):
@@ -17,13 +27,6 @@ class PublicError(BaseModel):
 
 class PublicErrorEnvelope(BaseModel):
     error: PublicError
-
-
-class PublicApiError(Exception):
-    def __init__(self, *, status_code: int, code: str, message: str | None = None):
-        self.status_code = status_code
-        self.code = code
-        self.message = message
 
 
 def public_error_response(*, status_code: int, code: str, message: str | None = None) -> JSONResponse:

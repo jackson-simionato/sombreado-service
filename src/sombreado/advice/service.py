@@ -1,6 +1,15 @@
-from app.config import Settings
-from app.errors import PublicApiError
-from app.schemas import (
+from sombreado.advice.exposure import (
+    recommended_seat_area,
+    summarize_advice_horizon,
+    summarize_exposure_window,
+    window_distance_meters,
+)
+from sombreado.advice.projection import project_location_to_segments, segments_after_projection
+from sombreado.advice.sun import sun_position
+from sombreado.config import Settings
+from sombreado.domain.errors import PublicApiError
+from sombreado.domain.geometry import midpoint
+from sombreado.domain.schemas import (
     AdviceComputationRequest,
     AdviceHorizon,
     AdviceMode,
@@ -13,16 +22,7 @@ from app.schemas import (
     RouteSegment,
     SegmentForAdvisory,
 )
-from app.services.exposure import (
-    recommended_seat_area,
-    summarize_advice_horizon,
-    summarize_exposure_window,
-    window_distance_meters,
-)
-from app.services.geometry import midpoint
-from app.services.projection import project_location_to_segments, segments_after_projection
-from app.services.routes import RouteReadService
-from app.services.sun import sun_position
+from sombreado.route_reads.service import RouteReadService
 
 
 class AdvisoryService:

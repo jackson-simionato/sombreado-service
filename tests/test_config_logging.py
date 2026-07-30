@@ -1,7 +1,7 @@
 import logging
 
-from app.config import Settings
-from app.logging import configure_logging, get_logger
+from sombreado.config import Settings
+from sombreado.logging import configure_logging, get_logger
 
 
 def test_settings_defaults_use_read_only_advisory_values():

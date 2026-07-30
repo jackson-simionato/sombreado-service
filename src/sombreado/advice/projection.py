@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from app.schemas import ProjectedRoutePosition, RouteSegment, SegmentForAdvisory
-from app.services.geometry import distance_meters, midpoint
+from sombreado.domain.geometry import distance_meters, midpoint
+from sombreado.domain.schemas import ProjectedRoutePosition, RouteSegment, SegmentForAdvisory
 
 
 @dataclass(frozen=True)

@@ -4,11 +4,11 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app
-from app.routes.advisory import get_advisory_service
-from app.routes.nearby import get_route_service
-from app.routes.route_candidates import get_route_service as get_route_candidate_service
-from app.schemas import (
+from sombreado.api.main import create_app
+from sombreado.api.routes.advisory import get_advisory_service
+from sombreado.api.routes.nearby import get_route_service
+from sombreado.api.routes.route_candidates import get_route_service as get_route_candidate_service
+from sombreado.domain.schemas import (
     AdviceMode,
     DirectionChoice,
     RouteCandidate,

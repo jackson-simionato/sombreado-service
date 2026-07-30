@@ -3,10 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings_dependency
-from app.db import get_session
-from app.schemas import RouteCandidatesResponse
-from app.services.routes import RouteReadService
+from sombreado.api.deps import get_session, get_settings_dependency
+from sombreado.api.schemas import RouteCandidatesResponse
+from sombreado.config import Settings
+from sombreado.route_reads.service import RouteReadService
 
 router = APIRouter(prefix="/v1/route-candidates", tags=["route-candidates"])
 

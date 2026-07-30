@@ -24,7 +24,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-
-async def get_settings_dependency() -> Settings:
-    return get_settings()

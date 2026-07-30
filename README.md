@@ -13,7 +13,7 @@ Useful development commands:
 
 | Command | Equivalent `uv` command | Purpose |
 | --- | --- | --- |
-| `make start` | `uv run uvicorn app.main:app --reload` | Start the local development server with reload enabled. |
+| `make start` | `uv run uvicorn sombreado.api.main:app --reload` | Start the local development server with reload enabled. |
 | `make test` | `uv run python -m pytest -q` | Run the test suite. |
 | `make format` | `uv run ruff format .` | Format Python files. |
 | `make lint` | `uv run ruff check .` | Run lint checks. |
@@ -29,6 +29,17 @@ make check
 See `docs/engineering-standards.md` for branch, commit, PR, and agent workflow standards.
 
 The project targets Python 3.14 through `.python-version` and `requires-python = ">=3.14"`.
+
+## Package layout
+
+Installable code lives under `src/sombreado/` with two process entry points:
+
+| Entry | How to run | Role |
+| --- | --- | --- |
+| API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (still reads Current Route Data from the Scraper Database via the Reader Database Role) |
+| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Stub until ingestion ownership lands |
+
+Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion` (stub), plus shared `config`, `logging`, and `domain`.
 
 ## Configuration
 
