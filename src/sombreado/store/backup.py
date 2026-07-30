@@ -14,6 +14,9 @@ from sombreado.store.object_storage import ObjectStorage
 
 DEFAULT_BACKUP_RETAIN = 7
 
+# Expected failure modes at the backup/storage boundary (not BaseException / KeyboardInterrupt).
+_BACKUP_JOB_ERRORS = (OSError, RuntimeError, ValueError, sqlite3.Error)
+
 
 class IntegrityError(RuntimeError):
     """Raised when a SQLite integrity check fails."""
@@ -95,7 +98,7 @@ def run_backup_job(
             _emit(alerter, message)
             return BackupJobOutcome(status="skipped_dirty", message=message)
         storage.upload(object_key, backup_path.read_bytes())
-    except Exception as exc:
+    except _BACKUP_JOB_ERRORS as exc:
         message = f"backup job failed: {exc}"
         _emit(alerter, message)
         return BackupJobOutcome(status="failed", message=message)
@@ -105,7 +108,7 @@ def run_backup_job(
 
     try:
         _prune_old_backups(storage, key_prefix=key_prefix, retain=retain)
-    except Exception as exc:
+    except _BACKUP_JOB_ERRORS as exc:
         _emit(alerter, f"backup uploaded but prune failed: {exc}")
     return BackupJobOutcome(status="uploaded", object_key=object_key, message="uploaded")
 
@@ -119,7 +122,7 @@ def restore_aside_from_object(
     work_dir: Path | None = None,
 ) -> str:
     """Move the live DB aside and install the newest integrity-checked Object Storage object."""
-    keys = sorted(key for key in storage.list_keys() if key.startswith(key_prefix))
+    keys = storage.list_keys(prefix=key_prefix)
     if not keys:
         raise FileNotFoundError(f"no backup objects with prefix {key_prefix!r}")
 
@@ -164,8 +167,7 @@ def _aside_live_database(live_database_path: Path, aside_dir: Path) -> None:
 
 def _prune_old_backups(storage: ObjectStorage, *, key_prefix: str, retain: int) -> None:
     """Delete older objects only after a newer good upload is present."""
-    keys = [key for key in storage.list_keys() if key.startswith(key_prefix)]
-    keys.sort()
+    keys = storage.list_keys(prefix=key_prefix)
     for stale in keys[:-retain] if retain > 0 else keys:
         storage.delete(stale)
 

@@ -132,8 +132,8 @@ def test_backup_job_alerts_on_upload_failure_without_removing_older_objects(tmp_
         def download(self, key: str) -> bytes:
             return prior.download(key)
 
-        def list_keys(self) -> list[str]:
-            return prior.list_keys()
+        def list_keys(self, *, prefix: str = "") -> list[str]:
+            return prior.list_keys(prefix=prefix)
 
         def delete(self, key: str) -> None:
             prior.delete(key)

@@ -12,7 +12,7 @@ class ObjectStorage(Protocol):
 
     def download(self, key: str) -> bytes: ...
 
-    def list_keys(self) -> list[str]: ...
+    def list_keys(self, *, prefix: str = "") -> list[str]: ...
 
     def delete(self, key: str) -> None: ...
 
@@ -32,8 +32,9 @@ class MemoryObjectStorage:
         except KeyError as exc:
             raise FileNotFoundError(key) from exc
 
-    def list_keys(self) -> list[str]:
-        return sorted(self._objects)
+    def list_keys(self, *, prefix: str = "") -> list[str]:
+        keys = [key for key in self._objects if key.startswith(prefix)]
+        return sorted(keys)
 
     def delete(self, key: str) -> None:
         self._objects.pop(key, None)
@@ -56,13 +57,15 @@ class DirectoryObjectStorage:
             raise FileNotFoundError(key)
         return path.read_bytes()
 
-    def list_keys(self) -> list[str]:
+    def list_keys(self, *, prefix: str = "") -> list[str]:
         if not self.root.exists():
             return []
         keys: list[str] = []
         for path in self.root.rglob("*"):
             if path.is_file():
-                keys.append(path.relative_to(self.root).as_posix())
+                key = path.relative_to(self.root).as_posix()
+                if key.startswith(prefix):
+                    keys.append(key)
         return sorted(keys)
 
     def delete(self, key: str) -> None:
@@ -98,27 +101,50 @@ class S3CompatibleObjectStorage:
         )
 
     def upload(self, key: str, data: bytes) -> None:
-        self._client().put_object(Bucket=self.bucket, Key=key, Body=data)
+        try:
+            self._client().put_object(Bucket=self.bucket, Key=key, Body=data)
+        except _S3_CLIENT_ERRORS as exc:
+            raise RuntimeError(f"s3 upload failed for {key!r}: {exc}") from exc
 
     def download(self, key: str) -> bytes:
-        response = self._client().get_object(Bucket=self.bucket, Key=key)
-        return response["Body"].read()
+        try:
+            response = self._client().get_object(Bucket=self.bucket, Key=key)
+            return response["Body"].read()
+        except _S3_CLIENT_ERRORS as exc:
+            raise RuntimeError(f"s3 download failed for {key!r}: {exc}") from exc
 
-    def list_keys(self) -> list[str]:
+    def list_keys(self, *, prefix: str = "") -> list[str]:
         client = self._client()
         keys: list[str] = []
         token: str | None = None
-        while True:
-            kwargs: dict[str, object] = {"Bucket": self.bucket}
-            if token is not None:
-                kwargs["ContinuationToken"] = token
-            response = client.list_objects_v2(**kwargs)
-            for item in response.get("Contents", []):
-                keys.append(item["Key"])
-            if not response.get("IsTruncated"):
-                break
-            token = response.get("NextContinuationToken")
+        try:
+            while True:
+                kwargs: dict[str, object] = {"Bucket": self.bucket}
+                if prefix:
+                    kwargs["Prefix"] = prefix
+                if token is not None:
+                    kwargs["ContinuationToken"] = token
+                response = client.list_objects_v2(**kwargs)
+                for item in response.get("Contents", []):
+                    keys.append(item["Key"])
+                if not response.get("IsTruncated"):
+                    break
+                token = response.get("NextContinuationToken")
+        except _S3_CLIENT_ERRORS as exc:
+            raise RuntimeError(f"s3 list failed for prefix {prefix!r}: {exc}") from exc
         return sorted(keys)
 
     def delete(self, key: str) -> None:
-        self._client().delete_object(Bucket=self.bucket, Key=key)
+        try:
+            self._client().delete_object(Bucket=self.bucket, Key=key)
+        except _S3_CLIENT_ERRORS as exc:
+            raise RuntimeError(f"s3 delete failed for {key!r}: {exc}") from exc
+
+
+def _s3_client_errors() -> tuple[type[BaseException], ...]:
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    return (BotoCoreError, ClientError)
+
+
+_S3_CLIENT_ERRORS = _s3_client_errors()

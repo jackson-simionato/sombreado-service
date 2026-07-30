@@ -10,8 +10,10 @@ from sombreado.ingestion.scrape import run_scrape
 from sombreado.logging import configure_logging
 from sombreado.store import GenerationStore
 from sombreado.store.alerting import LoggingAlerter
-from sombreado.store.backup import restore_aside_from_object, run_backup_job
+from sombreado.store.backup import IntegrityError, restore_aside_from_object, run_backup_job
 from sombreado.store.fixture_publish import publish_demo_fixture
+
+_RESTORE_ERRORS = (OSError, RuntimeError, ValueError, IntegrityError)
 
 app = typer.Typer(help="Sombreado Service scrape commands.", no_args_is_help=True)
 
@@ -116,7 +118,7 @@ def restore_command() -> None:
             key_prefix=settings.backup_key_prefix,
             work_dir=settings.backup_work_dir,
         )
-    except Exception as exc:
+    except _RESTORE_ERRORS as exc:
         LoggingAlerter().alert(f"restore failed: {exc}")
         typer.echo(f"restore failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
