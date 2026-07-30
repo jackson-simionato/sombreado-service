@@ -19,9 +19,10 @@ def test_migrate_applies_alembic_revision_and_is_idempotent(tmp_path: Path):
             row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
         }
 
-    assert version == ("20260730_0001",)
+    assert version == ("20260730_0002",)
     assert "dataset_generations" in tables
     assert "dataset_pointers" in tables
     assert "scrape_lease" in tables
+    assert "scrape_runs" in tables
     assert "segment_rtree" in tables
     assert store.current_generation() is None
