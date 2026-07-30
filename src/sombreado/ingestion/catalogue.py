@@ -125,4 +125,4 @@ class ConsorcioCatalogueSource:
                 )
                 return index, route_url, snapshot, None, tuple(soft_warnings)
             except Exception as exc:
-                return index, route_url, None, str(exc), ()
+                return index, route_url, None, f"{type(exc).__name__}: {exc}", ()
