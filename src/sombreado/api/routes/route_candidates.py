@@ -3,10 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings_dependency
-from app.db import get_session
-from app.schemas import RouteCandidatesResponse
-from app.services.routes import RouteReadService
+from sombreado.api.deps import get_session, get_settings_dependency
+from sombreado.api.mapping import to_route_candidates
+from sombreado.api.schemas import RouteCandidatesResponse
+from sombreado.config import Settings
+from sombreado.route_reads.service import RouteReadService
 
 router = APIRouter(prefix="/v1/route-candidates", tags=["route-candidates"])
 
@@ -26,7 +27,7 @@ async def search_route_candidates(
         query=query,
         limit=limit or settings.route_candidate_search_limit,
     )
-    return RouteCandidatesResponse(routes=routes)
+    return RouteCandidatesResponse(routes=to_route_candidates(routes))
 
 
 @router.get("/nearby", response_model=RouteCandidatesResponse, response_model_exclude_none=True)
@@ -44,4 +45,4 @@ async def nearby_route_candidates(
         radius_meters=radius_meters or settings.route_candidate_nearby_radius_meters,
         limit=limit or settings.route_candidate_nearby_limit,
     )
-    return RouteCandidatesResponse(routes=routes)
+    return RouteCandidatesResponse(routes=to_route_candidates(routes))

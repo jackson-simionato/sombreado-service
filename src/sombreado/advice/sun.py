@@ -3,7 +3,7 @@ from datetime import datetime
 from astral import Observer
 from astral.sun import azimuth, elevation
 
-from app.schemas import SunPosition
+from sombreado.domain.schemas import SunPosition
 
 
 def sun_position(*, lat: float, lng: float, dt: datetime) -> SunPosition:

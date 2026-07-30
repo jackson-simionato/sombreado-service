@@ -19,7 +19,7 @@ install: ## Install project dependencies
 	uv sync
 
 start: ## Start the local development server
-	uv run uvicorn app.main:app --reload
+	uv run uvicorn sombreado.api.main:app --reload
 
 test: ## Run the test suite
 	uv run python -m pytest -q

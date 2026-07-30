@@ -1,10 +1,11 @@
+"""Shared domain DTOs and enums (not the public browser HTTP schemas)."""
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import BaseModel, Field, field_validator
 
 
 class ExposureDirection(StrEnum):
@@ -52,21 +53,13 @@ class SunPosition(BaseModel):
     elevation: float
 
 
-class BrowserSchema(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-
-class RouteCandidate(BrowserSchema):
+class RouteCandidate(BaseModel):
     route_id: UUID
     route_version_id: UUID
     route_code: str
     route_name: str
     direction_hints: list[str] = Field(default_factory=list)
     distance_meters: float | None = None
-
-
-class RouteCandidatesResponse(BrowserSchema):
-    routes: list[RouteCandidate]
 
 
 class LightweightRouteDirection(BaseModel):
@@ -76,7 +69,7 @@ class LightweightRouteDirection(BaseModel):
     departure_labels: list[str] = Field(default_factory=list)
 
 
-class DirectionChoice(BrowserSchema):
+class DirectionChoice(BaseModel):
     route_direction_id: UUID
     sequence: int
     name: str
@@ -95,14 +88,6 @@ class RouteSummary(BaseModel):
 
 class RoutesResponse(BaseModel):
     routes: list[RouteSummary]
-
-
-class DirectionChoicesResponse(BrowserSchema):
-    route_version_id: UUID
-    directions: list[DirectionChoice]
-
-
-RouteDirectionsResponse = DirectionChoicesResponse
 
 
 class CandidateRouteDirection(BaseModel):
@@ -130,19 +115,12 @@ class RouteSegment(BaseModel):
     cumulative_distance_meters: float
 
 
-class LatLngPoint(BrowserSchema):
+class LatLngPoint(BaseModel):
     lat: float
     lng: float
 
 
-class RouteGeometryResponse(BrowserSchema):
-    route_id: UUID
-    route_version_id: UUID
-    route_direction_id: UUID
-    polyline: list[LatLngPoint] = Field(default_factory=list)
-
-
-class AdviceLocation(BrowserSchema):
+class AdviceLocation(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0)
@@ -151,24 +129,6 @@ class AdviceLocation(BrowserSchema):
     @field_validator("observed_at")
     @classmethod
     def require_location_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("observedAt must be timezone-aware")
-        return value
-
-
-class AdviceRequest(BrowserSchema):
-    route_id: str
-    route_version_id: str
-    route_direction_id: str
-    mode: Literal[AdviceMode.onboard, AdviceMode.preview]
-    horizon: AdviceHorizon
-    observed_at: datetime
-    location: AdviceLocation | None = None
-    fallback_to_preview: bool = False
-
-    @field_validator("observed_at")
-    @classmethod
-    def require_observed_timezone(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("observedAt must be timezone-aware")
         return value
@@ -185,14 +145,14 @@ class AdviceComputationRequest(BaseModel):
     fallback_to_preview: bool = False
 
 
-class AdvicePosition(BrowserSchema):
+class AdvicePosition(BaseModel):
     lat: float
     lng: float
     source: Literal["liveLocation", "directionStart"]
     distance_from_route_meters: float | None = None
 
 
-class AdviceSuccess(BrowserSchema):
+class AdviceSuccess(BaseModel):
     status: Literal["advice"] = "advice"
     mode: Literal[AdviceMode.onboard, AdviceMode.preview]
     horizon: AdviceHorizon
@@ -206,7 +166,7 @@ class AdviceSuccess(BrowserSchema):
     position: AdvicePosition | None = None
 
 
-class AdviceWithheld(BrowserSchema):
+class AdviceWithheld(BaseModel):
     status: Literal["withheld"] = "withheld"
     mode: AdviceMode
     horizon: AdviceHorizon | None = None
@@ -226,7 +186,7 @@ class AdviceWithheld(BrowserSchema):
 AdviceResponse = AdviceSuccess | AdviceWithheld
 
 
-class SegmentForAdvisory(BaseModel):
+class SegmentForAdvice(BaseModel):
     segment_id: UUID
     sequence: int
     midpoint_lat: float
@@ -251,7 +211,7 @@ class ExposureWindow(BaseModel):
     breakdown_meters: dict[ExposureDirection, float]
 
 
-class OnboardAdvisoryRequest(BaseModel):
+class OnboardAdviceRequest(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
     route_version_id: UUID
@@ -268,7 +228,7 @@ class OnboardAdvisoryRequest(BaseModel):
         return value
 
 
-class OnboardAdvisoryResponse(BaseModel):
+class OnboardAdviceResponse(BaseModel):
     status: Literal["advisory", "withheld"]
     route_version_id: UUID
     route_direction_id: UUID

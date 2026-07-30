@@ -2,9 +2,15 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.schemas import ExposureDirection, RecommendedSeatArea, SegmentForAdvisory, SunCondition, SunPosition
-from app.services import exposure
-from app.services.exposure import exposure_direction, summarize_exposure_window, window_distance_meters
+from sombreado.advice import exposure
+from sombreado.advice.exposure import exposure_direction, summarize_exposure_window, window_distance_meters
+from sombreado.domain.schemas import (
+    ExposureDirection,
+    RecommendedSeatArea,
+    SegmentForAdvice,
+    SunCondition,
+    SunPosition,
+)
 
 
 @pytest.mark.parametrize(
@@ -61,7 +67,7 @@ def test_sun_condition_uses_contract_thresholds(elevation, expected):
 
 def test_summarize_exposure_window_weights_dominant_direction_by_segment_distance():
     segments = [
-        SegmentForAdvisory(
+        SegmentForAdvice(
             segment_id="00000000-0000-0000-0000-000000000001",
             sequence=1,
             midpoint_lat=-27.6,
@@ -70,7 +76,7 @@ def test_summarize_exposure_window_weights_dominant_direction_by_segment_distanc
             distance_meters=100,
             cumulative_distance_meters=100,
         ),
-        SegmentForAdvisory(
+        SegmentForAdvice(
             segment_id="00000000-0000-0000-0000-000000000002",
             sequence=2,
             midpoint_lat=-27.6,
@@ -98,7 +104,7 @@ def test_summarize_exposure_window_weights_dominant_direction_by_segment_distanc
 
 def test_summarize_advice_horizon_uses_dominant_distance_weighted_sun_condition():
     segments = [
-        SegmentForAdvisory(
+        SegmentForAdvice(
             segment_id="00000000-0000-0000-0000-000000000001",
             sequence=1,
             midpoint_lat=-27.6,
@@ -107,7 +113,7 @@ def test_summarize_advice_horizon_uses_dominant_distance_weighted_sun_condition(
             distance_meters=10,
             cumulative_distance_meters=10,
         ),
-        SegmentForAdvisory(
+        SegmentForAdvice(
             segment_id="00000000-0000-0000-0000-000000000002",
             sequence=2,
             midpoint_lat=-27.6,

@@ -4,16 +4,12 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app
-from app.routes.advisory import get_advisory_service
-from app.routes.nearby import get_route_service
-from app.routes.route_candidates import get_route_service as get_route_candidate_service
-from app.schemas import (
-    AdviceMode,
-    DirectionChoice,
-    RouteCandidate,
-    RouteSegment,
-)
+from sombreado.api.main import create_app
+from sombreado.api.routes.advisory import get_advisory_service
+from sombreado.api.routes.nearby import get_route_service
+from sombreado.api.routes.route_candidates import get_route_service as get_route_candidate_service
+from sombreado.api.schemas import DirectionChoice, RouteCandidate
+from sombreado.domain.schemas import AdviceMode, RouteSegment
 
 
 class FakeRouteService:
@@ -95,7 +91,7 @@ class FakeRouteService:
         ]
 
 
-class FakeAdvisoryService:
+class FakeAdviceService:
     async def build_advice(self, request):
         self.last_advice_request = request
         if request.mode is AdviceMode.onboard:
@@ -141,7 +137,7 @@ async def fake_route_service():
 
 
 async def fake_advisory_service():
-    return FakeAdvisoryService()
+    return FakeAdviceService()
 
 
 @pytest.mark.asyncio
@@ -718,7 +714,7 @@ async def test_legacy_onboard_advisory_endpoint_is_removed():
 @pytest.mark.asyncio
 async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case():
     app = create_app()
-    fake_service = FakeAdvisoryService()
+    fake_service = FakeAdviceService()
 
     async def override_advisory_service():
         return fake_service
@@ -764,7 +760,7 @@ async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case()
 @pytest.mark.asyncio
 async def test_advice_endpoint_accepts_onboard_contract_with_location():
     app = create_app()
-    fake_service = FakeAdvisoryService()
+    fake_service = FakeAdviceService()
 
     async def override_advisory_service():
         return fake_service
@@ -819,7 +815,7 @@ async def test_advice_endpoint_accepts_onboard_contract_with_location():
 @pytest.mark.asyncio
 async def test_advice_endpoint_accepts_onboard_high_accuracy_and_old_location_timestamp():
     app = create_app()
-    fake_service = FakeAdvisoryService()
+    fake_service = FakeAdviceService()
 
     async def override_advisory_service():
         return fake_service
@@ -991,7 +987,7 @@ class ExplodingRouteCandidateService:
         raise RuntimeError("boom")
 
 
-class ExplodingAdvisoryService:
+class ExplodingAdviceService:
     async def build_advice(self, request):
         raise RuntimeError("boom")
 
@@ -1025,7 +1021,7 @@ async def test_advice_unexpected_failures_use_service_unavailable_envelope():
     app = create_app()
 
     async def exploding_service():
-        return ExplodingAdvisoryService()
+        return ExplodingAdviceService()
 
     app.dependency_overrides[get_advisory_service] = exploding_service
 
