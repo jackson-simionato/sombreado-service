@@ -134,6 +134,21 @@ def test_s3_compatible_reuses_cached_client(monkeypatch: pytest.MonkeyPatch) -> 
     assert len(created) == 1
 
 
+def test_s3_compatible_repr_omits_credentials() -> None:
+    storage = S3CompatibleObjectStorage(
+        bucket="backups",
+        endpoint_url="https://example.compat.objectstorage.local",
+        access_key="AKIA_SECRET_ACCESS",
+        secret_key="super-secret-value",
+    )
+
+    text = repr(storage)
+
+    assert "AKIA_SECRET_ACCESS" not in text
+    assert "super-secret-value" not in text
+    assert "backups" in text
+
+
 def test_s3_download_missing_object_raises_file_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     class MissingClient:
         def get_object(self, **kwargs: object) -> dict[str, object]:

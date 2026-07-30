@@ -90,8 +90,8 @@ class S3CompatibleObjectStorage:
 
     bucket: str
     endpoint_url: str
-    access_key: str
-    secret_key: str
+    access_key: str = field(repr=False)
+    secret_key: str = field(repr=False)
     region: str = "sa-saopaulo-1"
     _cached_client: Any = field(default=None, init=False, repr=False, compare=False)
 
