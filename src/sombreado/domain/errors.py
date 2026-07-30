@@ -1,8 +1,9 @@
-"""Application errors shared across entry points."""
+"""Application errors shared across entry points (not HTTP-specific)."""
 
 
-class PublicApiError(Exception):
-    def __init__(self, *, status_code: int, code: str, message: str | None = None):
-        self.status_code = status_code
+class ServiceError(Exception):
+    """Domain/application failure with a stable public error code."""
+
+    def __init__(self, *, code: str, message: str | None = None):
         self.code = code
         self.message = message

@@ -7,7 +7,7 @@ from sombreado.advice.exposure import (
 from sombreado.advice.projection import project_location_to_segments, segments_after_projection
 from sombreado.advice.sun import sun_position
 from sombreado.config import Settings
-from sombreado.domain.errors import PublicApiError
+from sombreado.domain.errors import ServiceError
 from sombreado.domain.geometry import midpoint
 from sombreado.domain.schemas import (
     AdviceComputationRequest,
@@ -17,33 +17,31 @@ from sombreado.domain.schemas import (
     AdviceResponse,
     AdviceSuccess,
     AdviceWithheld,
-    OnboardAdvisoryRequest,
-    OnboardAdvisoryResponse,
+    OnboardAdviceRequest,
+    OnboardAdviceResponse,
     RouteSegment,
-    SegmentForAdvisory,
+    SegmentForAdvice,
 )
 from sombreado.route_reads.service import RouteReadService
 
 
-class AdvisoryService:
+class AdviceService:
     def __init__(self, *, route_service: RouteReadService, settings: Settings):
         self._route_service = route_service
         self._settings = settings
 
     async def build_advice(self, request: AdviceComputationRequest) -> AdviceResponse:
         if request.mode not in {AdviceMode.onboard, AdviceMode.preview}:
-            raise PublicApiError(
-                status_code=422,
+            raise ServiceError(
                 code="validationFailed",
                 message="Request validation failed.",
             )
 
         current_route_version_id = await self._route_service.load_current_route_version_id(request.route_id)
         if current_route_version_id is None:
-            raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
+            raise ServiceError(code="routeNotFound", message="Current route was not found.")
         if current_route_version_id != request.route_version_id:
-            raise PublicApiError(
-                status_code=409,
+            raise ServiceError(
                 code="routeVersionStale",
                 message="Selected route version is no longer current.",
             )
@@ -51,8 +49,7 @@ class AdvisoryService:
             route_version_id=request.route_version_id,
             route_direction_id=request.route_direction_id,
         ):
-            raise PublicApiError(
-                status_code=404,
+            raise ServiceError(
                 code="routeDirectionNotFound",
                 message="Current route direction was not found.",
             )
@@ -74,8 +71,7 @@ class AdvisoryService:
 
         if request.mode is AdviceMode.onboard:
             if request.location is None:
-                raise PublicApiError(
-                    status_code=422,
+                raise ServiceError(
                     code="validationFailed",
                     message="Onboard advice requires location.",
                 )
@@ -174,13 +170,13 @@ class AdvisoryService:
             position=_direction_start_position(segments),
         )
 
-    async def build_onboard_advisory(self, request: OnboardAdvisoryRequest) -> OnboardAdvisoryResponse:
+    async def build_onboard_advisory(self, request: OnboardAdviceRequest) -> OnboardAdviceResponse:
         segments = await self._route_service.load_current_route_segments(
             route_version_id=request.route_version_id,
             route_direction_id=request.route_direction_id,
         )
         if not segments:
-            return OnboardAdvisoryResponse(
+            return OnboardAdviceResponse(
                 status="withheld",
                 route_version_id=request.route_version_id,
                 route_direction_id=request.route_direction_id,
@@ -190,7 +186,7 @@ class AdvisoryService:
 
         projection = project_location_to_segments(lat=request.lat, lng=request.lng, segments=segments)
         if projection.distance_from_route_meters > self._settings.off_route_threshold_meters:
-            return OnboardAdvisoryResponse(
+            return OnboardAdviceResponse(
                 status="withheld",
                 route_version_id=request.route_version_id,
                 route_direction_id=request.route_direction_id,
@@ -214,7 +210,7 @@ class AdvisoryService:
             for segment in remaining_segments
         ]
 
-        return OnboardAdvisoryResponse(
+        return OnboardAdviceResponse(
             status="advisory",
             route_version_id=request.route_version_id,
             route_direction_id=request.route_direction_id,
@@ -241,8 +237,8 @@ def _segments_from_direction_start(
     segments: list[RouteSegment],
     *,
     max_distance_meters: float | None = None,
-) -> list[SegmentForAdvisory]:
-    selected: list[SegmentForAdvisory] = []
+) -> list[SegmentForAdvice]:
+    selected: list[SegmentForAdvice] = []
     remaining_budget = max_distance_meters
     for segment in segments:
         distance = segment.distance_meters
@@ -254,7 +250,7 @@ def _segments_from_direction_start(
 
         lng, lat = midpoint(segment.coordinates)
         selected.append(
-            SegmentForAdvisory(
+            SegmentForAdvice(
                 segment_id=segment.id,
                 sequence=segment.sequence,
                 midpoint_lat=lat,
@@ -284,7 +280,7 @@ def _direction_start_position(segments: list[RouteSegment]) -> AdvicePosition:
 def _build_advice_success(
     *,
     request: AdviceComputationRequest,
-    segments: list[SegmentForAdvisory],
+    segments: list[SegmentForAdvice],
     position: AdvicePosition,
 ) -> AdviceSuccess:
     sun_positions = [

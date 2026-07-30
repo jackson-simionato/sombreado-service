@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sombreado.api.deps import get_session
 from sombreado.api.errors import PublicApiError, parse_public_uuid
+from sombreado.api.mapping import to_direction_choices, to_polyline
 from sombreado.api.schemas import (
     RouteDirectionsResponse,
     RouteGeometryResponse,
@@ -36,7 +37,10 @@ async def route_directions(
             message="Selected route version is no longer current.",
         )
     directions = await route_service.load_direction_choices(route_version_id=current_route_version_id)
-    return RouteDirectionsResponse(route_version_id=current_route_version_id, directions=directions)
+    return RouteDirectionsResponse(
+        route_version_id=current_route_version_id,
+        directions=to_direction_choices(directions),
+    )
 
 
 @router.get(
@@ -80,5 +84,5 @@ async def route_geometry(
         route_id=parsed_route_id,
         route_version_id=route_version_id,
         route_direction_id=parsed_route_direction_id,
-        polyline=flatten_route_polyline(segments),
+        polyline=to_polyline(flatten_route_polyline(segments)),
     )

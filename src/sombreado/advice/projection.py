@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from sombreado.domain.geometry import distance_meters, midpoint
-from sombreado.domain.schemas import ProjectedRoutePosition, RouteSegment, SegmentForAdvisory
+from sombreado.domain.schemas import ProjectedRoutePosition, RouteSegment, SegmentForAdvice
 
 
 @dataclass(frozen=True)
@@ -37,8 +37,8 @@ def segments_after_projection(
     segments: list[RouteSegment],
     projection: ProjectedRoutePosition,
     max_distance_meters: float | None = None,
-) -> list[SegmentForAdvisory]:
-    selected: list[SegmentForAdvisory] = []
+) -> list[SegmentForAdvice]:
+    selected: list[SegmentForAdvice] = []
     remaining_budget = max_distance_meters
     started = False
     for segment in segments:
@@ -64,7 +64,7 @@ def segments_after_projection(
 
         lon, lat = midpoint(segment.coordinates)
         selected.append(
-            SegmentForAdvisory(
+            SegmentForAdvice(
                 segment_id=segment.id,
                 sequence=segment.sequence,
                 midpoint_lat=lat,

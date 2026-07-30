@@ -3,16 +3,16 @@ from uuid import UUID
 
 import pytest
 
-from sombreado.advice.service import AdvisoryService
+from sombreado.advice.service import AdviceService
 from sombreado.config import Settings
-from sombreado.domain.errors import PublicApiError
+from sombreado.domain.errors import ServiceError
 from sombreado.domain.schemas import (
     AdviceComputationRequest,
     AdviceHorizon,
     AdviceLocation,
     AdviceMode,
     ExposureDirection,
-    OnboardAdvisoryRequest,
+    OnboardAdviceRequest,
     RouteSegment,
 )
 
@@ -84,8 +84,8 @@ class PreviewRouteService:
         return self.segments
 
 
-def _request(lat: float, lng: float) -> OnboardAdvisoryRequest:
-    return OnboardAdvisoryRequest(
+def _request(lat: float, lng: float) -> OnboardAdviceRequest:
+    return OnboardAdviceRequest(
         lat=lat,
         lng=lng,
         route_version_id=ROUTE_VERSION_ID,
@@ -130,7 +130,7 @@ def _onboard_advice_request(
 
 
 async def test_advisory_is_withheld_when_selected_direction_has_no_segments():
-    service = AdvisoryService(route_service=EmptyRouteService(), settings=Settings())
+    service = AdviceService(route_service=EmptyRouteService(), settings=Settings())
 
     response = await service.build_onboard_advisory(_request(lat=-27.6, lng=-48.5))
 
@@ -139,7 +139,7 @@ async def test_advisory_is_withheld_when_selected_direction_has_no_segments():
 
 
 async def test_advisory_is_withheld_when_location_is_past_off_route_threshold():
-    service = AdvisoryService(
+    service = AdviceService(
         route_service=SingleSegmentRouteService(),
         settings=Settings(off_route_threshold_meters=75),
     )
@@ -153,7 +153,7 @@ async def test_advisory_is_withheld_when_location_is_past_off_route_threshold():
 
 
 async def test_advisory_returns_upcoming_and_remaining_exposure_when_on_route():
-    service = AdvisoryService(route_service=SingleSegmentRouteService(), settings=Settings())
+    service = AdviceService(route_service=SingleSegmentRouteService(), settings=Settings())
 
     response = await service.build_onboard_advisory(_request(lat=-27.6, lng=-48.495))
 
@@ -164,7 +164,7 @@ async def test_advisory_returns_upcoming_and_remaining_exposure_when_on_route():
 
 
 async def test_preview_advice_anchors_at_direction_start_and_returns_remaining_route(monkeypatch):
-    service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
+    service = AdviceService(route_service=PreviewRouteService(), settings=Settings())
 
     monkeypatch.setattr(
         "sombreado.advice.service.sun_position",
@@ -209,7 +209,7 @@ async def test_preview_advice_upcoming_horizon_uses_internal_15_minute_distance_
             ),
         ]
     )
-    service = AdvisoryService(route_service=route_service, settings=Settings(nominal_bus_speed_kmh=18))
+    service = AdviceService(route_service=route_service, settings=Settings(nominal_bus_speed_kmh=18))
     sun_samples = iter(
         [
             type("Sun", (), {"azimuth": 45, "elevation": 35})(),
@@ -226,7 +226,7 @@ async def test_preview_advice_upcoming_horizon_uses_internal_15_minute_distance_
 
 
 async def test_preview_advice_shorter_than_upcoming_window_still_returns_advice(monkeypatch):
-    service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings(nominal_bus_speed_kmh=18))
+    service = AdviceService(route_service=PreviewRouteService(), settings=Settings(nominal_bus_speed_kmh=18))
     monkeypatch.setattr(
         "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 135, "elevation": 35})(),
@@ -239,7 +239,7 @@ async def test_preview_advice_shorter_than_upcoming_window_still_returns_advice(
 
 
 async def test_preview_advice_withholds_when_selected_direction_has_no_materialized_geometry():
-    service = AdvisoryService(route_service=PreviewRouteService(segments=[]), settings=Settings())
+    service = AdviceService(route_service=PreviewRouteService(segments=[]), settings=Settings())
 
     response = await service.build_advice(_advice_request())
 
@@ -249,7 +249,7 @@ async def test_preview_advice_withholds_when_selected_direction_has_no_materiali
 
 
 async def test_preview_advice_withholds_when_selected_horizon_has_no_computable_distance():
-    service = AdvisoryService(
+    service = AdviceService(
         route_service=PreviewRouteService(
             segments=[
                 RouteSegment(
@@ -272,24 +272,22 @@ async def test_preview_advice_withholds_when_selected_horizon_has_no_computable_
 
 
 @pytest.mark.parametrize(
-    ("route_service", "status_code", "code"),
+    ("route_service", "code"),
     [
-        (PreviewRouteService(route_version_id=None), 404, "routeNotFound"),
+        (PreviewRouteService(route_version_id=None), "routeNotFound"),
         (
             PreviewRouteService(route_version_id=UUID("00000000-0000-0000-0000-000000000099")),
-            409,
             "routeVersionStale",
         ),
-        (PreviewRouteService(direction_belongs=False), 404, "routeDirectionNotFound"),
+        (PreviewRouteService(direction_belongs=False), "routeDirectionNotFound"),
     ],
 )
-async def test_preview_advice_raises_public_errors_for_invalid_selection(route_service, status_code, code):
-    service = AdvisoryService(route_service=route_service, settings=Settings())
+async def test_preview_advice_raises_service_errors_for_invalid_selection(route_service, code):
+    service = AdviceService(route_service=route_service, settings=Settings())
 
-    with pytest.raises(PublicApiError) as exc_info:
+    with pytest.raises(ServiceError) as exc_info:
         await service.build_advice(_advice_request())
 
-    assert exc_info.value.status_code == status_code
     assert exc_info.value.code == code
 
 
@@ -308,7 +306,7 @@ async def test_preview_advice_returns_success_for_night_overhead_and_low_sun(
     expected_exposure,
     expected_condition,
 ):
-    service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
+    service = AdviceService(route_service=PreviewRouteService(), settings=Settings())
     monkeypatch.setattr(
         "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": sun_azimuth, "elevation": sun_elevation})(),
@@ -322,7 +320,7 @@ async def test_preview_advice_returns_success_for_night_overhead_and_low_sun(
 
 
 async def test_onboard_advice_projects_live_location_and_returns_requested_horizon(monkeypatch):
-    service = AdvisoryService(route_service=PreviewRouteService(), settings=Settings())
+    service = AdviceService(route_service=PreviewRouteService(), settings=Settings())
     monkeypatch.setattr(
         "sombreado.advice.service.sun_position",
         lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 45, "elevation": 35})(),
@@ -343,7 +341,7 @@ async def test_onboard_advice_projects_live_location_and_returns_requested_horiz
 
 
 async def test_onboard_advice_withholds_when_location_is_off_route_without_fallback():
-    service = AdvisoryService(
+    service = AdviceService(
         route_service=PreviewRouteService(),
         settings=Settings(off_route_threshold_meters=75),
     )
@@ -358,7 +356,7 @@ async def test_onboard_advice_withholds_when_location_is_off_route_without_fallb
 
 
 async def test_onboard_advice_off_route_fallback_returns_preview_with_requested_horizon(monkeypatch):
-    service = AdvisoryService(
+    service = AdviceService(
         route_service=PreviewRouteService(),
         settings=Settings(off_route_threshold_meters=75),
     )
@@ -379,7 +377,7 @@ async def test_onboard_advice_off_route_fallback_returns_preview_with_requested_
 
 
 async def test_onboard_advice_off_route_fallback_preserves_preview_withheld_for_zero_distance():
-    service = AdvisoryService(
+    service = AdviceService(
         route_service=PreviewRouteService(
             segments=[
                 RouteSegment(

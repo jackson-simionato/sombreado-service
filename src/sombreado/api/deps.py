@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sombreado.config import Settings, get_settings
+from sombreado.config import Settings, get_api_settings
 from sombreado.store.db import get_session as store_get_session
 
 
@@ -14,4 +14,4 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def get_settings_dependency() -> Settings:
-    return get_settings()
+    return get_api_settings()

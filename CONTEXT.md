@@ -1,19 +1,23 @@
 # Sombreado Service
 
-This context describes the read-only advisory backend that serves onboard sun-side guidance from scraper-owned route data.
+This context describes the backend that serves onboard sun-side guidance. Today the passenger API still reads scraper-owned route data; the codebase is reshaping toward dual entry points (API + scrape CLI) that will later own ingestion.
 
 ## Language
 
 **Sombreado Service**:
-The passenger-facing backend API that computes onboard sun-side advisories from current route segment data.
-_Avoid_: Scraper, ingestion service
+The installable backend package with two process entry points: the passenger-facing browser API and the scrape CLI. Until cutover, the API still computes Advice from scraper-owned **Current Route Data**.
+_Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
+
+**Scrape CLI**:
+The separate OS-process entry point that will run Consórcio Fênix fetch/publish. May be a stub before store ownership lands.
+_Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Scraper Database**:
-The PostGIS database owned by the Consorcio Fenix scraper and consumed read-only by the Sombreado Service.
+The PostGIS database owned by the Consorcio Fenix scraper and consumed read-only by the Sombreado Service API until centralized SQLite cutover.
 _Avoid_: App database, service database
 
 **Reader Database Role**:
-The separate database user used by the Sombreado Service with SELECT-only access to scraper-owned tables.
+The separate database user used by the Sombreado Service API with SELECT-only access to scraper-owned tables (current passenger-read path).
 _Avoid_: Migration user, scraper user, owner role
 
 **Render Deployment**:
@@ -102,8 +106,10 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 ## Relationships
 
-- The **Sombreado Service** consumes the **Scraper Database** through the **Reader Database Role**.
+- The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
+- Until cutover, the API consumes the **Scraper Database** through the **Reader Database Role**.
 - A **Reader Database Role** must not mutate scraper-owned route data.
+- The **Scrape CLI** must not run inside the API request path.
 - **Route Discovery** exposes only **Current Route Data**.
 - **Route Discovery** supports **Route Search** and a **Nearby Route Filter**.
 - **Route Search** returns **Route Candidates** by route code and route name.
@@ -171,7 +177,8 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 ## Flagged ambiguities
 
-- "database user" means the **Reader Database Role** for this service, not the scraper's ingestion or migration role.
+- Dual entry points and a **Scrape CLI** seam do not yet mean this service owns durable route storage; passenger reads still use the **Reader Database Role** until SQLite cutover.
+- "database user" means the **Reader Database Role** for this service's API, not the scraper's ingestion or migration role.
 - "deploy" means GitHub Actions triggering the **Render Deployment** after CI passes on `main`, not Render auto-deploying before CI.
 - `DATABASE_URL` is a **Runtime Secret**, not a **Pipeline Secret**.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.

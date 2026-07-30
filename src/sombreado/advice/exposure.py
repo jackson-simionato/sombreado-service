@@ -6,7 +6,7 @@ from sombreado.domain.schemas import (
     ExposureDirection,
     ExposureWindow,
     RecommendedSeatArea,
-    SegmentForAdvisory,
+    SegmentForAdvice,
     SunCondition,
     SunPosition,
 )
@@ -62,7 +62,7 @@ def sun_condition(sun: SunPosition) -> SunCondition:
 
 def summarize_advice_horizon(
     *,
-    segments: Sequence[SegmentForAdvisory],
+    segments: Sequence[SegmentForAdvice],
     sun_positions: Sequence[SunPosition],
 ) -> AdviceHorizonSummary:
     breakdown = {direction: 0.0 for direction in ExposureDirection}
@@ -86,7 +86,7 @@ def summarize_advice_horizon(
 
 def summarize_exposure_window(
     *,
-    segments: Sequence[SegmentForAdvisory],
+    segments: Sequence[SegmentForAdvice],
     request_datetime: datetime,
     sun_positions: Sequence[SunPosition],
 ) -> ExposureWindow:

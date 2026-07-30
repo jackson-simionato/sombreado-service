@@ -1,5 +1,5 @@
 """Sun-side advice computation."""
 
-from sombreado.advice.service import AdvisoryService
+from sombreado.advice.service import AdviceService
 
-__all__ = ["AdvisoryService"]
+__all__ = ["AdviceService"]

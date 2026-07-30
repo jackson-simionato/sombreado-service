@@ -1,6 +1,8 @@
 import logging
 
-from sombreado.config import Settings
+import pytest
+
+from sombreado.config import Settings, get_api_settings, get_cli_settings, get_settings
 from sombreado.logging import configure_logging, get_logger
 
 
@@ -29,9 +31,25 @@ def test_cors_origins_can_be_configured_from_environment(monkeypatch):
     assert settings.cors_origins == ["https://app.example.com"]
 
 
+def test_api_and_cli_settings_validate_their_subsets(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    assert get_api_settings().cors_origins
+    assert get_cli_settings().database_url
+
+
+def test_api_settings_reject_empty_cors_origins():
+    settings = Settings(_env_file=None, cors_origins=[])
+
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        settings.require_api()
+
+
 def test_configure_logging_sets_level_and_shared_logger(caplog):
     configure_logging("DEBUG")
-    logger = get_logger("app.tests")
+    logger = get_logger("sombreado.tests")
 
     with caplog.at_level(logging.DEBUG):
         logger.debug("route candidate query started")
