@@ -5,7 +5,8 @@ from pathlib import Path
 import typer
 
 from sombreado.config import get_cli_settings
-from sombreado.ingestion import run_scrape
+from sombreado.ingestion.catalogue import ConsorcioCatalogueSource
+from sombreado.ingestion.scrape import run_scrape
 from sombreado.logging import configure_logging
 from sombreado.store import GenerationStore
 from sombreado.store.fixture_publish import publish_demo_fixture
@@ -26,11 +27,27 @@ def scrape(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Lease/staging recovery only (reserved; unused by the stub).",
+        help="Discard incomplete staging and reclaim a held scrape lease, then scrape.",
     ),
 ) -> None:
-    """Run a full Consórcio Fênix scrape and publish (not implemented yet)."""
-    typer.echo(run_scrape(force=force))
+    """Fetch live Consórcio Fênix data, validate, and publish under operating policy."""
+    settings = get_cli_settings()
+    store = GenerationStore(settings.sqlite_database_path)
+    outcome = run_scrape(
+        store,
+        ConsorcioCatalogueSource(),
+        force=force,
+        retry_backoff_seconds=5.0,
+    )
+    if outcome.status == "published":
+        typer.echo(
+            f"published generation={outcome.generation_id} "
+            f"routes={outcome.route_count} warnings={outcome.warning_count} "
+            f"current={store.current_generation()}"
+        )
+        raise typer.Exit(code=0)
+    typer.echo(f"scrape {outcome.status}: {outcome.message}", err=True)
+    raise typer.Exit(code=1)
 
 
 @app.command("publish-fixture")

@@ -9,7 +9,7 @@ The installable backend package with two process entry points: the passenger-fac
 _Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
 
 **Scrape CLI**:
-The separate OS-process entry point that will run Consórcio Fênix fetch/publish. Today it can publish fixture generations into the **Generation Store**; live Consórcio scrape lands later.
+The separate OS-process entry point that fetches Consórcio Fênix data, validates a staged **Dataset Generation**, and publishes into the **Generation Store** under the production operating policy (lease, absence-vs-hard-failure, one retry). It can also publish fixture generations for demos.
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Generation Store**:
@@ -120,7 +120,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
 - Until cutover, the API consumes the **Scraper Database** through the **Reader Database Role**.
-- The **Scrape CLI** owns migrate/publish against the **Generation Store**; passenger API reads do not use it yet.
+- The **Scrape CLI** owns live Consórcio fetch, migrate, and publish against the **Generation Store**; passenger API reads do not use it yet.
 - A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
 - Incomplete staging never auto-publishes; failure retains the last successful current (+ previous when present).
 - A **Reader Database Role** must not mutate scraper-owned route data.

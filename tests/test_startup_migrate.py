@@ -30,18 +30,20 @@ def test_api_startup_applies_migrations(sqlite_path: Path):
 
     with sqlite3.connect(sqlite_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert version == ("20260730_0001",)
+    assert version == ("20260730_0002",)
 
 
 def test_cli_startup_applies_migrations(sqlite_path: Path):
     runner = CliRunner()
 
-    result = runner.invoke(cli_app, ["scrape"])
+    result = runner.invoke(cli_app, ["publish-fixture"])
 
     assert result.exit_code == 0, result.stdout
     with sqlite3.connect(sqlite_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert version == ("20260730_0001",)
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+    assert version == ("20260730_0002",)
+    assert "scrape_runs" in tables
 
 
 def test_docker_entrypoint_runs_migrate_then_exec():

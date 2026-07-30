@@ -45,11 +45,18 @@ class GenerationStore:
         config.set_main_option("sqlalchemy.url", f"sqlite:///{self.database_path.resolve()}")
         command.upgrade(config, "head")
 
-    def claim_scrape_lease(self, holder_id: str, *, ttl_seconds: int = 1200) -> None:
+    def claim_scrape_lease(
+        self,
+        holder_id: str,
+        *,
+        ttl_seconds: int = 1200,
+        force: bool = False,
+    ) -> None:
         """Claim the singleton scrape lease with BEGIN IMMEDIATE, or fail fast.
 
         Expired leases are reclaimed only after discarding orphan staging/validated
-        generations that are not current or previous.
+        generations that are not current or previous. ``force=True`` reclaims an
+        active lease the same way (lease/staging recovery only).
         """
         now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl_seconds)
@@ -62,9 +69,9 @@ class GenerationStore:
                 if row is not None:
                     current_holder, expires_text = str(row[0]), str(row[1])
                     expired = datetime.fromisoformat(expires_text) <= now
-                    if current_holder != holder_id and not expired:
+                    if current_holder != holder_id and not expired and not force:
                         raise ScrapeLeaseHeldError(f"scrape lease held by {current_holder}")
-                    if expired:
+                    if expired or force:
                         delete_orphan_staging(connection)
                 connection.execute(
                     """
@@ -279,6 +286,74 @@ class GenerationStore:
                 lng=lng,
                 radius_meters=radius_meters,
             )
+
+    def record_scrape_run(
+        self,
+        run_id: str,
+        *,
+        started_at: datetime,
+        finished_at: datetime,
+        outcome: str,
+        generation_id: str | None,
+        route_count: int,
+        warning_count: int,
+        error_summary: str | None,
+    ) -> None:
+        """Persist minimal scrape-run ops metadata."""
+        with self._connect() as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    INSERT INTO scrape_runs(
+                        id, started_at, finished_at, outcome, generation_id,
+                        route_count, warning_count, error_summary
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        started_at.isoformat(),
+                        finished_at.isoformat(),
+                        outcome,
+                        generation_id,
+                        route_count,
+                        warning_count,
+                        error_summary,
+                    ),
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def prune_scrape_runs(self, *, retention_days: int = 30, keep_last: int = 30) -> None:
+        """Drop scrape-run rows outside the short retention horizon."""
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        with self._connect() as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    "DELETE FROM scrape_runs WHERE started_at < ?",
+                    (cutoff.isoformat(),),
+                )
+                excess = connection.execute(
+                    """
+                    SELECT id FROM scrape_runs
+                    ORDER BY started_at DESC
+                    LIMIT -1 OFFSET ?
+                    """,
+                    (keep_last,),
+                ).fetchall()
+                if excess:
+                    placeholders = ", ".join("?" for _ in excess)
+                    connection.execute(
+                        f"DELETE FROM scrape_runs WHERE id IN ({placeholders})",
+                        tuple(str(row[0]) for row in excess),
+                    )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
