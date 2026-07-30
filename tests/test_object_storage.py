@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 
 from sombreado.store.object_storage import DirectoryObjectStorage, S3CompatibleObjectStorage
 
@@ -106,3 +107,49 @@ def test_s3_compatible_list_keys_paginates_with_prefix(monkeypatch: pytest.Monke
     assert calls[0]["Prefix"] == "sombreado-routes"
     assert calls[1]["ContinuationToken"] == "page-2"
     assert calls[1]["Prefix"] == "sombreado-routes"
+
+
+def test_s3_compatible_reuses_cached_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeS3Client()
+    created: list[object] = []
+
+    def fake_boto_client(service_name: str, **kwargs: object) -> FakeS3Client:
+        del service_name, kwargs
+        created.append(object())
+        return fake
+
+    monkeypatch.setattr("boto3.client", fake_boto_client)
+    storage = S3CompatibleObjectStorage(
+        bucket="backups",
+        endpoint_url="https://example.compat.objectstorage.local",
+        access_key="key",
+        secret_key="secret",
+    )
+
+    storage.upload("sombreado-routes-1.sqlite", b"one")
+    assert storage.download("sombreado-routes-1.sqlite") == b"one"
+    assert storage.list_keys(prefix="sombreado-routes") == ["sombreado-routes-1.sqlite"]
+    storage.delete("sombreado-routes-1.sqlite")
+
+    assert len(created) == 1
+
+
+def test_s3_download_missing_object_raises_file_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    class MissingClient:
+        def get_object(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}},
+                "GetObject",
+            )
+
+    storage = S3CompatibleObjectStorage(
+        bucket="backups",
+        endpoint_url="https://example.compat.objectstorage.local",
+        access_key="key",
+        secret_key="secret",
+    )
+    monkeypatch.setattr(S3CompatibleObjectStorage, "_client", lambda self: MissingClient())
+
+    with pytest.raises(FileNotFoundError, match="missing.sqlite"):
+        storage.download("missing.sqlite")

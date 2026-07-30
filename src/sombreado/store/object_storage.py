@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+
+from botocore.exceptions import BotoCoreError, ClientError
+
+_S3_CLIENT_ERRORS = (BotoCoreError, ClientError)
+_S3_MISSING_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
 
 
 class ObjectStorage(Protocol):
@@ -88,17 +93,21 @@ class S3CompatibleObjectStorage:
     access_key: str
     secret_key: str
     region: str = "sa-saopaulo-1"
+    _cached_client: Any = field(default=None, init=False, repr=False, compare=False)
 
     def _client(self):
-        import boto3
+        if self._cached_client is None:
+            import boto3
 
-        return boto3.client(
-            "s3",
-            endpoint_url=self.endpoint_url,
-            aws_access_key_id=self.access_key,
-            aws_secret_access_key=self.secret_key,
-            region_name=self.region,
-        )
+            client = boto3.client(
+                "s3",
+                endpoint_url=self.endpoint_url,
+                aws_access_key_id=self.access_key,
+                aws_secret_access_key=self.secret_key,
+                region_name=self.region,
+            )
+            object.__setattr__(self, "_cached_client", client)
+        return self._cached_client
 
     def upload(self, key: str, data: bytes) -> None:
         try:
@@ -110,7 +119,11 @@ class S3CompatibleObjectStorage:
         try:
             response = self._client().get_object(Bucket=self.bucket, Key=key)
             return response["Body"].read()
-        except _S3_CLIENT_ERRORS as exc:
+        except ClientError as exc:
+            if _is_missing_object(exc):
+                raise FileNotFoundError(key) from exc
+            raise RuntimeError(f"s3 download failed for {key!r}: {exc}") from exc
+        except BotoCoreError as exc:
             raise RuntimeError(f"s3 download failed for {key!r}: {exc}") from exc
 
     def list_keys(self, *, prefix: str = "") -> list[str]:
@@ -141,10 +154,6 @@ class S3CompatibleObjectStorage:
             raise RuntimeError(f"s3 delete failed for {key!r}: {exc}") from exc
 
 
-def _s3_client_errors() -> tuple[type[BaseException], ...]:
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    return (BotoCoreError, ClientError)
-
-
-_S3_CLIENT_ERRORS = _s3_client_errors()
+def _is_missing_object(exc: ClientError) -> bool:
+    code = str(exc.response.get("Error", {}).get("Code", ""))
+    return code in _S3_MISSING_CODES
