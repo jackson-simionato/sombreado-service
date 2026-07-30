@@ -37,7 +37,7 @@ Installable code lives under `src/sombreado/` with two process entry points:
 | Entry | How to run | Role |
 | --- | --- | --- |
 | API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (still reads Current Route Data from the Scraper Database via the Reader Database Role) |
-| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Stub until ingestion ownership lands |
+| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Consórcio scrape stub; `publish-fixture` demos the SQLite generation store |
 
 Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion` (stub), plus shared `config`, `logging`, and `domain`.
 
