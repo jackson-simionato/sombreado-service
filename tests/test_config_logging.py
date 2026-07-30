@@ -34,10 +34,11 @@ def test_cors_origins_can_be_configured_from_environment(monkeypatch):
 def test_api_and_cli_settings_validate_their_subsets(monkeypatch):
     get_settings.cache_clear()
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("SQLITE_DATABASE_PATH", raising=False)
     monkeypatch.delenv("CORS_ORIGINS", raising=False)
 
     assert get_api_settings().cors_origins
-    assert get_cli_settings().database_url
+    assert get_cli_settings().sqlite_database_path
 
 
 def test_api_settings_reject_empty_cors_origins():

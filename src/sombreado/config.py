@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -8,6 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     database_url: str = "postgresql+asyncpg://sombreado_service_reader:sombreado@localhost:5432/consorcio_fenix"
+    sqlite_database_path: Path = Path("data/sombreado.sqlite")
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )
@@ -39,9 +41,8 @@ class Settings(BaseSettings):
 
     def require_cli(self) -> "Settings":
         """Validate the settings subset required by the scrape CLI process."""
-        # Scrape still shares DATABASE_URL until the SQLite store path lands.
-        if not self.database_url.strip():
-            raise ValueError("DATABASE_URL must be non-empty for the scrape CLI")
+        if not str(self.sqlite_database_path).strip():
+            raise ValueError("SQLITE_DATABASE_PATH must be non-empty for the scrape CLI")
         return self
 
 

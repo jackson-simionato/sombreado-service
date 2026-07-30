@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,14 +12,28 @@ from sombreado.api.errors import (
 from sombreado.api.routes import advisory, health, nearby, route_candidates
 from sombreado.config import get_api_settings
 from sombreado.domain.errors import ServiceError
-from sombreado.logging import configure_logging
+from sombreado.logging import configure_logging, get_logger
+from sombreado.store import GenerationStore
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    settings = get_api_settings()
+    store = GenerationStore(settings.sqlite_database_path)
+    store.migrate()
+    get_logger(__name__).info(
+        "Applied Generation Store migrations database=%s current=%s",
+        settings.sqlite_database_path,
+        store.current_generation(),
+    )
+    yield
 
 
 def create_app() -> FastAPI:
     settings = get_api_settings()
     configure_logging(settings.log_level)
 
-    app = FastAPI(title="sombreado-service")
+    app = FastAPI(title="sombreado-service", lifespan=lifespan)
     app.add_exception_handler(ServiceError, public_api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(Exception, unexpected_public_error_handler)

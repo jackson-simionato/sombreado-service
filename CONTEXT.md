@@ -9,12 +9,24 @@ The installable backend package with two process entry points: the passenger-fac
 _Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
 
 **Scrape CLI**:
-The separate OS-process entry point that will run Consórcio Fênix fetch/publish. May be a stub before store ownership lands.
+The separate OS-process entry point that will run Consórcio Fênix fetch/publish. Today it can publish fixture generations into the **Generation Store**; live Consórcio scrape lands later.
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
+
+**Generation Store**:
+The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Not yet the passenger API read path.
+_Avoid_: Scraper Database, app database, SpatiaLite
+
+**Dataset Generation**:
+One complete scrape/fixture snapshot in the **Generation Store**, addressed by generation id. Roles are staging (in-flight), current (passenger-visible pointer), and previous (immediate prior current).
+_Avoid_: Route version history archive, active dataset file swap
+
+**Scrape Lease**:
+The singleton DB-backed mutual-exclusion record that prevents overlapping scrape/fixture publish jobs against the **Generation Store**.
+_Avoid_: Distributed lock service, API request lock
 
 **Scraper Database**:
 The PostGIS database owned by the Consorcio Fenix scraper and consumed read-only by the Sombreado Service API until centralized SQLite cutover.
-_Avoid_: App database, service database
+_Avoid_: App database, service database, Generation Store
 
 **Reader Database Role**:
 The separate database user used by the Sombreado Service API with SELECT-only access to scraper-owned tables (current passenger-read path).
@@ -108,6 +120,9 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
 - Until cutover, the API consumes the **Scraper Database** through the **Reader Database Role**.
+- The **Scrape CLI** owns migrate/publish against the **Generation Store**; passenger API reads do not use it yet.
+- A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
+- Incomplete staging never auto-publishes; failure retains the last successful current (+ previous when present).
 - A **Reader Database Role** must not mutate scraper-owned route data.
 - The **Scrape CLI** must not run inside the API request path.
 - **Route Discovery** exposes only **Current Route Data**.
@@ -177,7 +192,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 ## Flagged ambiguities
 
-- Dual entry points and a **Scrape CLI** seam do not yet mean this service owns durable route storage; passenger reads still use the **Reader Database Role** until SQLite cutover.
+- The **Generation Store** exists for fixture publish and upcoming scrape ownership, but passenger reads still use the **Reader Database Role** / **Scraper Database** until SQLite cutover.
 - "database user" means the **Reader Database Role** for this service's API, not the scraper's ingestion or migration role.
 - "deploy" means GitHub Actions triggering the **Render Deployment** after CI passes on `main`, not Render auto-deploying before CI.
 - `DATABASE_URL` is a **Runtime Secret**, not a **Pipeline Secret**.
