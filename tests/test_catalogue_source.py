@@ -75,6 +75,28 @@ async def test_still_listed_fetch_failure_is_hard_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_missing_snapshot_without_error_is_hard_failure(monkeypatch):
+    source = ConsorcioCatalogueSource(source_url=INDEX, concurrency=1)
+    pages: dict[str, str | Exception] = {INDEX: INDEX_HTML, ROUTE_A: ROUTE_HTML, ROUTE_B: ROUTE_HTML}
+    monkeypatch.setattr(
+        "sombreado.ingestion.catalogue.AsyncHttpFetcher",
+        lambda _config=None: FakeFetcher(pages),
+    )
+
+    async def fake_fetch_one(self, fetcher, semaphore, index, total, route_url):
+        del self, fetcher, semaphore, total
+        return index, route_url, None, None, ()
+
+    monkeypatch.setattr(ConsorcioCatalogueSource, "_fetch_one", fake_fetch_one)
+
+    collection = await source._collect_async()
+
+    assert ROUTE_A in collection.hard_failures
+    assert ROUTE_B in collection.hard_failures
+    assert collection.rows["routes"] == []
+
+
+@pytest.mark.asyncio
 async def test_catalogue_absence_omits_route_without_hard_failure(monkeypatch):
     source = ConsorcioCatalogueSource(source_url=INDEX, concurrency=1)
     index_only_a = f'<html><body><a href="{ROUTE_A}">A</a></body></html>'

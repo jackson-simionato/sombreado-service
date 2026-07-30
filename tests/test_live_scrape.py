@@ -167,6 +167,44 @@ def test_one_automatic_retry_after_collect_failure(tmp_path: Path):
     assert store.current_generation() == outcome.generation_id
 
 
+def test_discard_staging_failure_is_surfaced_in_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    store = GenerationStore(tmp_path / "routes.sqlite")
+    store.migrate()
+    _seed_current(store)
+
+    def fail_publish(self, generation_id: str) -> None:
+        del self, generation_id
+        raise RuntimeError("publish boom")
+
+    def fail_discard(self, generation_id: str) -> None:
+        del self, generation_id
+        raise RuntimeError("cannot discard")
+
+    monkeypatch.setattr(GenerationStore, "publish", fail_publish)
+    monkeypatch.setattr(GenerationStore, "discard_staging", fail_discard)
+
+    outcome = run_scrape(
+        store,
+        FakeSource(
+            [
+                ScrapeCollection(
+                    rows=sample_generation_rows(generation_suffix="b"),
+                    hard_failures=(),
+                    warnings=(),
+                )
+            ]
+        ),
+        holder_id="cli-1",
+        max_attempts=1,
+        retry_backoff_seconds=0,
+    )
+
+    assert outcome.status == "failed"
+    assert "publish boom" in outcome.message
+    assert "discard_staging failed: cannot discard" in outcome.message
+    assert store.current_generation() == "gen-a"
+
+
 def test_non_retryable_collect_errors_propagate(tmp_path: Path):
     store = GenerationStore(tmp_path / "routes.sqlite")
     store.migrate()

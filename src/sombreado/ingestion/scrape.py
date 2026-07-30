@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,6 +11,8 @@ from typing import Literal, Protocol
 from uuid import uuid4
 
 from sombreado.store.generation import CanonicalRows, GenerationStore, ScrapeLeaseHeldError
+
+logger = logging.getLogger(__name__)
 
 ScrapeOutcomeStatus = Literal["published", "failed", "lease_held"]
 
@@ -105,8 +108,13 @@ def run_scrape(
                 if store.has_generation(generation_id):
                     try:
                         store.discard_staging(generation_id)
-                    except RuntimeError:
-                        pass
+                    except RuntimeError as discard_exc:
+                        logger.warning(
+                            "failed to discard staging generation %s after publish error: %s",
+                            generation_id,
+                            discard_exc,
+                        )
+                        last_error = f"{last_error}; discard_staging failed: {discard_exc}"
                 continue
 
             outcome = ScrapeOutcome(

@@ -67,7 +67,13 @@ class ConsorcioCatalogueSource:
                 hard_failures.append(route_url)
                 logger.warning("Hard failure for still-listed route %s: %s", route_url, error)
                 continue
-            assert snapshot is not None
+            if snapshot is None:
+                hard_failures.append(route_url)
+                logger.warning(
+                    "Hard failure for still-listed route %s: missing snapshot without error detail",
+                    route_url,
+                )
+                continue
             snapshots.append(snapshot)
             warnings.extend(route_warnings)
 
