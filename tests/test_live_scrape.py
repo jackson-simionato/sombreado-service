@@ -6,6 +6,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from sombreado.ingestion.scrape import ScrapeCollection, run_scrape
 from sombreado.store.generation import CanonicalRows, GenerationStore
 from sombreado.store.sample_data import sample_generation_rows
@@ -163,6 +165,22 @@ def test_one_automatic_retry_after_collect_failure(tmp_path: Path):
     assert outcome.status == "published"
     assert source.calls == 2
     assert store.current_generation() == outcome.generation_id
+
+
+def test_non_retryable_collect_errors_propagate(tmp_path: Path):
+    store = GenerationStore(tmp_path / "routes.sqlite")
+    store.migrate()
+    _seed_current(store)
+
+    class BrokenSource:
+        def collect(self) -> ScrapeCollection:
+            raise TypeError("programmer mistake")
+
+    with pytest.raises(TypeError, match="programmer mistake"):
+        run_scrape(store, BrokenSource(), holder_id="cli-1", retry_backoff_seconds=0)
+
+    assert store.current_generation() == "gen-a"
+    assert store.scrape_lease_holder() is None
 
 
 def test_scrape_run_metadata_recorded_and_pruned(tmp_path: Path):

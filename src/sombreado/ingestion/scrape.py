@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import sleep
@@ -11,6 +12,10 @@ from uuid import uuid4
 from sombreado.store.generation import CanonicalRows, GenerationStore, ScrapeLeaseHeldError
 
 ScrapeOutcomeStatus = Literal["published", "failed", "lease_held"]
+
+# Transient/source failures worth one automatic retry. Programming errors propagate.
+_RETRYABLE_COLLECT_ERRORS = (OSError, PermissionError, RuntimeError, TimeoutError, ValueError)
+_RETRYABLE_PUBLISH_ERRORS = (RuntimeError, ValueError, sqlite3.Error)
 
 
 @dataclass(frozen=True)
@@ -80,7 +85,7 @@ def run_scrape(
                 sleep(retry_backoff_seconds)
             try:
                 collection = source.collect()
-            except Exception as exc:
+            except _RETRYABLE_COLLECT_ERRORS as exc:
                 last_error = str(exc)
                 continue
 
@@ -95,7 +100,7 @@ def run_scrape(
                 store.stage(generation_id, collection.rows)
                 store.validate(generation_id)
                 store.publish(generation_id)
-            except Exception as exc:
+            except _RETRYABLE_PUBLISH_ERRORS as exc:
                 last_error = str(exc)
                 if store.has_generation(generation_id):
                     try:
