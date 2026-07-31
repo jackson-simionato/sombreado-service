@@ -36,16 +36,20 @@ _Avoid_: App database, service database, Generation Store
 Retired passenger-read seam. Historically the SELECT-only database user used by the API against scraper-owned tables; the API no longer uses this role.
 _Avoid_: Migration user, scraper user, owner role
 
+**Oracle VM Deployment**:
+The production runtime for the Sombreado Service on one Oracle Always Free VM: systemd `sombreado-api` plus scrape and backup timers, durable **Generation Store** under `/var/lib/sombreado/`, releases under `/opt/sombreado/`, deployed by GitHub Actions after CI passes on `main`.
+_Avoid_: Render as production API host, registry-based deploy, deleting the data directory on release
+
 **Render Deployment**:
-The no-cost web service runtime for the Sombreado Service, triggered by GitHub Actions after CI passes on `main`.
-_Avoid_: VPS deployment, registry deployment, Render auto-deploy
+Retired production hosting seam. Historically the no-cost Render Free web service triggered by GitHub Actions; kept only as a possible read-only rollback host until cutover retirement.
+_Avoid_: Current production deploy target
 
 **Pipeline Secret**:
-A secret used by GitHub Actions to trigger or authenticate deployment automation.
+A secret used by GitHub Actions to authenticate VM deployment (SSH host/user/key). Actions does not hold Object Storage or other runtime secrets.
 _Avoid_: Runtime secret, application setting
 
 **Runtime Secret**:
-A secret consumed by the running Sombreado Service (for example Object Storage credentials on the VM). The passenger API datastore path is `SQLITE_DATABASE_PATH`, not a PostGIS `DATABASE_URL`.
+A secret consumed by the running Sombreado Service on the VM (for example Object Storage credentials in `/etc/sombreado/env`). The passenger API datastore path is `SQLITE_DATABASE_PATH` under `/var/lib/sombreado/`, not a PostGIS `DATABASE_URL`.
 _Avoid_: Pipeline secret, CI variable
 
 **Current Route Data**:
@@ -160,9 +164,9 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - Preview **Advice Position** uses the selected direction start.
 - A **Sun Condition** describes the selected **Advice Horizon**, not individual route segments.
 - A **Seat-area Recommendation** is produced by **Advice** and is not derived by the browser client.
-- A **Render Deployment** runs the **Sombreado Service** and is triggered by GitHub Actions after CI passes on `main`.
-- A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it.
-- A **Runtime Secret** belongs with the running service when that process needs it.
+- An **Oracle VM Deployment** runs the **Sombreado Service** (API systemd unit + scrape/backup timers) and is updated by GitHub Actions after CI passes on `main`.
+- A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it (VM SSH credentials only).
+- A **Runtime Secret** belongs on the VM (`/etc/sombreado/env`) when the API or CLI process needs it.
 
 ## Example dialogue
 
@@ -200,7 +204,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 - The **Generation Store** is the passenger read path for discovery, directions, geometry, and advice.
 - **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
-- "deploy" means GitHub Actions triggering the **Render Deployment** after CI passes on `main`, not Render auto-deploying before CI.
+- "deploy" means GitHub Actions syncing a release to the **Oracle VM Deployment** after CI passes on `main` (rsync → symlink flip → restart API), not deleting `/var/lib/sombreado/` and not Render auto-deploy.
 - `SQLITE_DATABASE_PATH` is the passenger API datastore setting; legacy `DATABASE_URL` is not part of the passenger runtime path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.

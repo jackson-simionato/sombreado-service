@@ -1,0 +1,21 @@
+[Unit]
+Description=Sombreado Service Consórcio scrape (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sombreado
+Group=sombreado
+WorkingDirectory=/opt/sombreado/current
+EnvironmentFile=/etc/sombreado/env
+Environment=PATH=/opt/sombreado/current/.venv/bin:/usr/bin
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/sombreado
+ExecStart=/opt/sombreado/current/.venv/bin/sombreado-scrape scrape
+# Headroom over ~102s full scrape; CLI performs one in-process retry.
+TimeoutStartSec=20min
+Nice=10

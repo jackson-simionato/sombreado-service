@@ -1,0 +1,24 @@
+[Unit]
+Description=Sombreado Service passenger API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sombreado
+Group=sombreado
+WorkingDirectory=/opt/sombreado/current
+EnvironmentFile=/etc/sombreado/env
+Environment=PATH=/opt/sombreado/current/.venv/bin:/usr/bin
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/sombreado
+ExecStart=/opt/sombreado/current/.venv/bin/uvicorn sombreado.api.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
