@@ -118,9 +118,9 @@ sudo DEPLOY_USER=ubuntu ./deploy/bootstrap-vm.sh
 # re-run bootstrap after changing activator, deploy-release.sh, or deploy/systemd/*
 ```
 
-`DEPLOY_USER` is the GitHub Actions SSH login: bootstrap adds it to group `sombreado` (rsync into `/opt/sombreado/releases`) and installs a sudoers drop-in for the **fixed** root-owned activator `/usr/local/sbin/sombreado-deploy-release` only (never a path under the writable release tree). systemd units are copied into `/usr/local/lib/sombreado/systemd` at bootstrap and installed from there on activate — not from the rsynced release. Activate runs `uv sync` as root (then `chown`s the release/`.venv` to `sombreado`) so a root-only uv install still works. On Oracle A1 (aarch64), confirm `uv sync --frozen --no-dev` resolves wheels before relying on deploys.
+`DEPLOY_USER` is the GitHub Actions SSH login: bootstrap adds it to group `sombreado` (rsync into `/opt/sombreado/releases`) and installs a sudoers drop-in for the **fixed** root-owned activator `/usr/local/sbin/sombreado-deploy-release` only (never a path under the writable release tree). systemd units are copied into `/usr/local/lib/sombreado/systemd` at bootstrap and installed from there on activate — not from the rsynced release. Activate rejects symlink release trees and runs `uv sync` as `sombreado` (prefer `uv` at `/usr/local/bin/uv`). On Oracle A1 (aarch64), confirm `uv sync --frozen --no-dev` resolves wheels before relying on deploys.
 
-After CI passes on `main`, GitHub Actions rsyncs the commit into `/opt/sombreado/releases/<sha>`, then runs `sudo /usr/local/sbin/sombreado-deploy-release <sha>` (symlink flip + restart + `/health/live` check). Configure repository secrets `VM_HOST`, `VM_USER`, `VM_SSH_PRIVATE_KEY`, and `VM_SSH_KNOWN_HOSTS` (optional `VM_PORT`). `VM_SSH_KNOWN_HOSTS` must be the pinned `known_hosts` line(s) for the VM — CI does not use `ssh-keyscan`. Deploy is skipped when those secrets are absent.
+After CI passes on `main`, GitHub Actions rsyncs the commit into `/opt/sombreado/releases/<sha>`, then runs `sudo /usr/local/sbin/sombreado-deploy-release <sha>` (symlink flip + restart + `/health/ready` check). Configure repository secrets `VM_HOST`, `VM_USER`, `VM_SSH_PRIVATE_KEY`, and `VM_SSH_KNOWN_HOSTS` (optional `VM_PORT`). `VM_SSH_KNOWN_HOSTS` must be the pinned `known_hosts` line(s) for the VM — CI does not use `ssh-keyscan`. Missing secrets fail the deploy job unless `ALLOW_SKIP_DEPLOY=1` is set. Activate rollback restores previous code only; it does not downgrade SQLite schema.
 
 Put a reverse proxy (Caddy/nginx + Let’s Encrypt) in front of `127.0.0.1:8000`. Browser URL cutover is a separate production step.
 
@@ -132,6 +132,7 @@ service boundary. Browser/frontend code should still treat `routeId`,
 meaning from them.
 
 - `GET /health/live`
+- `GET /health/ready` — Generation Store openable after migrate; includes `currentGeneration` (may be `null` before the first publish)
 - `GET /v1/route-candidates/nearby`
   - Finds current route candidates near a passenger location for the browser nearby route path.
   - Query parameters:

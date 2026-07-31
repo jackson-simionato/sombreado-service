@@ -48,22 +48,31 @@ jobs:
     runs-on: ubuntu-latest
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: sombreado-vm-deploy
+      cancel-in-progress: false
     env:
       VM_HOST: ${{ secrets.VM_HOST }}
       VM_USER: ${{ secrets.VM_USER }}
       VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
       VM_SSH_KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
       VM_PORT: ${{ secrets.VM_PORT }}
+      ALLOW_SKIP_DEPLOY: ${{ secrets.ALLOW_SKIP_DEPLOY }}
       RELEASE_SHA: ${{ github.sha }}
 
     steps:
-      - name: Skip deployment when VM secrets are not configured
+      - name: Require VM deploy secrets on main
         if: >-
           env.VM_HOST == '' || env.VM_USER == '' || env.VM_SSH_PRIVATE_KEY == '' ||
           env.VM_SSH_KNOWN_HOSTS == ''
-        run: >-
-          echo "VM_HOST / VM_USER / VM_SSH_PRIVATE_KEY / VM_SSH_KNOWN_HOSTS
-          not configured; skipping VM deployment."
+        run: |
+          if [ "${ALLOW_SKIP_DEPLOY}" = "1" ]; then
+            echo "ALLOW_SKIP_DEPLOY=1; skipping VM deployment."
+            exit 0
+          fi
+          echo "VM_HOST / VM_USER / VM_SSH_PRIVATE_KEY / VM_SSH_KNOWN_HOSTS are required on main."
+          echo "Set those secrets, or set ALLOW_SKIP_DEPLOY=1 to opt out explicitly."
+          exit 1
 
       - name: Check out repository
         if: >-
@@ -88,7 +97,12 @@ jobs:
           env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
           env.VM_SSH_KNOWN_HOSTS != ''
         env:
-          SSH_OPTS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+          SSH_OPTS: >-
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o IdentitiesOnly=yes
         run: |
           REMOTE_RELEASE="/opt/sombreado/releases/${RELEASE_SHA}"
           ssh ${SSH_OPTS} -p "${VM_PORT:-22}" "${VM_USER}@${VM_HOST}" "mkdir -p '${REMOTE_RELEASE}'"
@@ -108,7 +122,12 @@ jobs:
           env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
           env.VM_SSH_KNOWN_HOSTS != ''
         env:
-          SSH_OPTS: -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+          SSH_OPTS: >-
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o IdentitiesOnly=yes
         run: |
           ssh ${SSH_OPTS} -p "${VM_PORT:-22}" "${VM_USER}@${VM_HOST}" \
             "sudo /usr/local/sbin/sombreado-deploy-release '${RELEASE_SHA}'"

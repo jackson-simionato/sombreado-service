@@ -140,3 +140,82 @@ def test_scrape_lease_excludes_overlapping_holders(tmp_path: Path):
     store.release_scrape_lease("worker-1")
     store.claim_scrape_lease("worker-2", ttl_seconds=600)
     assert store.scrape_lease_holder() == "worker-2"
+
+
+def _stable_route_rows(*, generation_suffix: str, route_name: str) -> dict[str, list[dict[str, object]]]:
+    """Same stable route id across generations; only version/name content varies."""
+    rows = sample_generation_rows(generation_suffix=generation_suffix)
+    route_id = "route-stable"
+    rows["routes"] = [
+        {
+            **rows["routes"][0],
+            "id": route_id,
+            "code": "110",
+            "name": route_name,
+            "slug": "route-110",
+        }
+    ]
+    for version in rows["route_versions"]:
+        version["route_id"] = route_id
+    return rows
+
+
+def test_stage_does_not_mutate_shared_route_attributes_until_publish(tmp_path: Path):
+    store = GenerationStore(tmp_path / "routes.sqlite")
+    store.migrate()
+    store.stage("gen-a", _stable_route_rows(generation_suffix="a", route_name="Old Name"))
+    store.validate("gen-a")
+    store.publish("gen-a")
+
+    store.stage("gen-b", _stable_route_rows(generation_suffix="b", route_name="Staged Name"))
+
+    with sqlite3.connect(store.database_path) as connection:
+        name = connection.execute("SELECT name FROM routes WHERE id = 'route-stable'").fetchone()[0]
+    assert name == "Old Name"
+
+    store.discard_staging("gen-b")
+    with sqlite3.connect(store.database_path) as connection:
+        name = connection.execute("SELECT name FROM routes WHERE id = 'route-stable'").fetchone()[0]
+    assert name == "Old Name"
+
+    store.stage("gen-c", _stable_route_rows(generation_suffix="c", route_name="Published Name"))
+    store.validate("gen-c")
+    store.publish("gen-c")
+    with sqlite3.connect(store.database_path) as connection:
+        name = connection.execute("SELECT name FROM routes WHERE id = 'route-stable'").fetchone()[0]
+    assert name == "Published Name"
+
+
+def test_expected_counts_include_non_current_membership_versions(tmp_path: Path):
+    store = GenerationStore(tmp_path / "routes.sqlite")
+    store.migrate()
+    rows = sample_generation_rows(generation_suffix="a")
+    rows["routes"].append(
+        {
+            "id": "route-legacy",
+            "code": "999",
+            "name": "Legacy",
+            "slug": "route-999",
+            "category": "conventional",
+            "fare_region": None,
+            "last_changed": None,
+            "is_current": 0,
+        }
+    )
+    rows["route_versions"].append(
+        {
+            "id": "version-legacy",
+            "route_id": "route-legacy",
+            "source_hash": "legacy",
+            "map_hash": None,
+            "page_url": "https://example.test/legacy",
+            "map_url": None,
+            "is_current": 0,
+        }
+    )
+
+    store.stage("gen-a", rows)
+    store.validate("gen-a")
+    store.publish("gen-a")
+    assert store.current_generation() == "gen-a"
+    assert "version-legacy" in store.current_route_version_ids()

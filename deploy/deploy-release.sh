@@ -11,11 +11,16 @@
 # Production entry point (root-owned, via sudoers):
 #   sudo /usr/local/sbin/sombreado-deploy-release <sha>
 #
+# Rollback note: health failure restores the previous *code* symlink only. It does
+# not downgrade the durable Generation Store under /var/lib/sombreado/. Schema-forward
+# Alembic migrations applied by a new release's lifespan are not rolled back; treat
+# breaking migrations as expand/contract and non-rollbackable for activate.
+#
 # Overrides for tests / non-standard roots:
 #   SOMBREADO_ROOT SOMBREADO_DATA_ROOT SOMBREADO_UNIT_DIR SOMBREADO_ENV_FILE
 #   SOMBREADO_DEPLOY_LIB SOMBREADO_UNIT_SOURCE SOMBREADO_ENFORCE_UNIT_OWNERSHIP
 #   SYSTEMCTL UV KEEP_RELEASES HEALTH_URL HEALTH_TIMEOUT_SECONDS
-#   ROLLBACK_HEALTH_TIMEOUT_SECONDS CURL
+#   ROLLBACK_HEALTH_TIMEOUT_SECONDS CURL RUNUSER
 
 set -euo pipefail
 
@@ -29,8 +34,9 @@ SOMBREADO_ENFORCE_UNIT_OWNERSHIP="${SOMBREADO_ENFORCE_UNIT_OWNERSHIP:-1}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 UV="${UV:-uv}"
 CURL="${CURL:-curl}"
+RUNUSER="${RUNUSER:-runuser}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health/live}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health/ready}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
 ROLLBACK_HEALTH_TIMEOUT_SECONDS="${ROLLBACK_HEALTH_TIMEOUT_SECONDS:-30}"
 
@@ -64,10 +70,25 @@ if [[ -z "${RELEASE_SHA:-}" ]]; then
 fi
 
 RELEASE_DIR="${SOMBREADO_ROOT}/releases/${RELEASE_SHA}"
+# [[ -d ]] follows symlinks; reject link trees before any privileged sync.
+if [[ -L "${RELEASE_DIR}" ]]; then
+  echo "release path must not be a symlink: ${RELEASE_DIR}" >&2
+  exit 1
+fi
 if [[ ! -d "${RELEASE_DIR}" ]]; then
   echo "release directory missing: ${RELEASE_DIR}" >&2
   exit 1
 fi
+
+RELEASES_ROOT="$(cd "${SOMBREADO_ROOT}/releases" && pwd -P)"
+RELEASE_DIR="$(cd "${RELEASE_DIR}" && pwd -P)"
+case "${RELEASE_DIR}" in
+  "${RELEASES_ROOT}"/*) ;;
+  *)
+    echo "release path escapes releases root: ${RELEASE_DIR}" >&2
+    exit 1
+    ;;
+esac
 
 if [[ ! -f "${SOMBREADO_ENV_FILE}" ]]; then
   echo "runtime env missing: ${SOMBREADO_ENV_FILE} (copy deploy/env.example)" >&2
@@ -108,14 +129,26 @@ if [[ -z "${UV_BIN}" ]]; then
   echo "uv not found on PATH (set UV=/path/to/uv or install to /usr/local/bin/uv)" >&2
   exit 1
 fi
-# Sync as the activator user (root in production). Do not sudo -u sombreado uv:
-# a root-only install under /root/.local/bin is not executable by sombreado.
-(
-  cd "${RELEASE_DIR}"
-  "${UV_BIN}" sync --frozen --no-dev
-)
-if id -u sombreado >/dev/null 2>&1; then
+# Sync as sombreado when possible so deployer-writable trees never execute build
+# backends as root. Prefer world-executable /usr/local/bin/uv from bootstrap.
+if [[ "$(id -u)" -eq 0 ]] && id -u sombreado >/dev/null 2>&1; then
   chown -R sombreado:sombreado "${RELEASE_DIR}"
+  if command -v "${RUNUSER}" >/dev/null 2>&1; then
+    "${RUNUSER}" -u sombreado -- /bin/bash -c \
+      "cd \"${RELEASE_DIR}\" && exec \"${UV_BIN}\" sync --frozen --no-dev"
+  else
+    # Fallback when runuser is unavailable (still not root sync).
+    su -s /bin/bash sombreado -c \
+      "cd \"${RELEASE_DIR}\" && exec \"${UV_BIN}\" sync --frozen --no-dev"
+  fi
+else
+  (
+    cd "${RELEASE_DIR}"
+    "${UV_BIN}" sync --frozen --no-dev
+  )
+  if id -u sombreado >/dev/null 2>&1; then
+    chown -R sombreado:sombreado "${RELEASE_DIR}"
+  fi
 fi
 
 echo "installing systemd units from root-owned ${SOMBREADO_UNIT_SOURCE}"
@@ -160,6 +193,8 @@ wait_for_health() {
 }
 
 if ! wait_for_health "${HEALTH_TIMEOUT_SECONDS}" "new release"; then
+  # Code-only rollback: restore previous current symlink. Durable SQLite schema
+  # upgrades already applied by the new release are not downgraded.
   if [[ -n "${PREVIOUS_CURRENT}" && "${PREVIOUS_CURRENT}" != "$(readlink -f "${RELEASE_DIR}")" && -d "${PREVIOUS_CURRENT}" ]]; then
     echo "restoring previous current -> ${PREVIOUS_CURRENT}" >&2
     ln -sfn "${PREVIOUS_CURRENT}" "${SOMBREADO_ROOT}/current.new"

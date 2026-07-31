@@ -48,7 +48,7 @@ def _parsed(page_url: str, code: str) -> ParsedRoutePage:
 
 
 @pytest.mark.asyncio
-async def test_still_listed_fetch_failure_is_hard_failure(monkeypatch, caplog):
+async def test_still_listed_fetch_failure_is_hard_failure(monkeypatch):
     source = ConsorcioCatalogueSource(source_url=INDEX, concurrency=1)
     pages: dict[str, str | Exception] = {
         INDEX: INDEX_HTML,
@@ -67,13 +67,18 @@ async def test_still_listed_fetch_failure_is_hard_failure(monkeypatch, caplog):
         "sombreado.ingestion.catalogue.infer_service_direction_matches",
         lambda *_args, **_kwargs: [],
     )
+    warnings_logged: list[str] = []
 
-    with caplog.at_level("WARNING", logger="sombreado.ingestion.catalogue"):
-        collection = await source._collect_async()
+    def capture_warning(message: str, *args: object) -> None:
+        warnings_logged.append(message % args if args else message)
+
+    monkeypatch.setattr("sombreado.ingestion.catalogue.logger.warning", capture_warning)
+
+    collection = await source._collect_async()
 
     assert ROUTE_A in collection.hard_failures
     assert collection.rows["routes"] == []
-    assert any("RuntimeError: boom" in record.message for record in caplog.records)
+    assert any("RuntimeError: boom" in message for message in warnings_logged)
 
 
 @pytest.mark.asyncio
