@@ -18,10 +18,7 @@ def get_engine() -> AsyncEngine:
     if _engine is None:
         database_url = get_settings().database_url.strip()
         if not database_url:
-            raise ValueError(
-                "DATABASE_URL is required only for legacy PostGIS RouteReadService callers; "
-                "passenger API uses SQLITE_DATABASE_PATH"
-            )
+            raise ValueError("DATABASE_URL must be non-empty for async SQLAlchemy sessions")
         _engine = create_async_engine(database_url, pool_pre_ping=True)
     return _engine
 

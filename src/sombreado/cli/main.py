@@ -4,16 +4,12 @@ from pathlib import Path
 
 import typer
 
-from sombreado.config import get_backup_settings, get_cli_settings
+from sombreado.config import get_cli_settings
 from sombreado.ingestion.catalogue import ConsorcioCatalogueSource
 from sombreado.ingestion.scrape import run_scrape
 from sombreado.logging import configure_logging
 from sombreado.store import GenerationStore
-from sombreado.store.alerting import LoggingAlerter
-from sombreado.store.backup import IntegrityError, restore_aside_from_object, run_backup_job
 from sombreado.store.fixture_publish import publish_demo_fixture
-
-_RESTORE_ERRORS = (OSError, RuntimeError, ValueError, IntegrityError)
 
 app = typer.Typer(help="Sombreado Service scrape commands.", no_args_is_help=True)
 
@@ -35,7 +31,7 @@ def scrape(
 ) -> None:
     """Fetch live Consórcio Fênix data, validate, and publish under operating policy."""
     settings = get_cli_settings()
-    store = GenerationStore(settings.sqlite_database_path)
+    store = GenerationStore(settings.database_url)
     store.migrate()
     outcome = run_scrape(
         store,
@@ -56,10 +52,10 @@ def scrape(
 
 @app.command("publish-fixture")
 def publish_fixture_command(
-    database: Path | None = typer.Option(
+    database_url: str | None = typer.Option(
         None,
-        "--database",
-        help="SQLite database path (defaults to SQLITE_DATABASE_PATH).",
+        "--database-url",
+        help="Postgres DATABASE_URL (defaults to DATABASE_URL env).",
     ),
     fixture: Path | None = typer.Option(
         None,
@@ -74,56 +70,35 @@ def publish_fixture_command(
 ) -> None:
     """Publish a fixture/snapshot generation and print the current pointer."""
     settings = get_cli_settings()
-    database_path = database or settings.sqlite_database_path
+    url = (database_url or settings.database_url).strip()
     published_id, store = publish_demo_fixture(
-        database_path,
+        url,
         fixture_path=fixture,
         generation_id=generation_id,
     )
-    typer.echo(f"published generation={published_id} current={store.current_generation()} database={database_path}")
+    typer.echo(f"published generation={published_id} current={store.current_generation()}")
 
 
 @app.command("backup")
 def backup_command() -> None:
-    """Online-backup the Generation Store, integrity-check, upload, retain last N."""
-    settings = get_backup_settings()
-    outcome = run_backup_job(
-        settings.sqlite_database_path,
-        settings.build_object_storage(),
-        work_dir=settings.backup_work_dir,
-        retain=settings.backup_retain,
-        key_prefix=settings.backup_key_prefix,
-        alerter=LoggingAlerter(),
-    )
-    if outcome.status == "uploaded":
-        typer.echo(f"backup uploaded object={outcome.object_key}")
-        raise typer.Exit(code=0)
-    typer.echo(f"backup {outcome.status}: {outcome.message}", err=True)
+    """Parked: historical SQLite online-backup path (not a v1 Neon obligation)."""
+    typer.echo("backup is parked for Neon Generation Store", err=True)
     raise typer.Exit(code=1)
 
 
 @app.command("restore")
 def restore_command() -> None:
-    """Aside the live DB and install the newest integrity-checked Object Storage object.
+    """Parked: historical SQLite restore path (not a v1 Neon obligation)."""
+    typer.echo("restore is parked for Neon Generation Store", err=True)
+    raise typer.Exit(code=1)
 
-    Stop the API and scrape timer before running. After restore, start the API and
-    scrape when convenient. If no usable backup exists, start empty and scrape fresh.
-    """
-    settings = get_backup_settings()
-    try:
-        object_key = restore_aside_from_object(
-            settings.sqlite_database_path,
-            settings.build_object_storage(),
-            aside_dir=settings.backup_aside_dir,
-            key_prefix=settings.backup_key_prefix,
-            work_dir=settings.backup_work_dir,
-        )
-    except _RESTORE_ERRORS as exc:
-        LoggingAlerter().alert(f"restore failed: {exc}")
-        typer.echo(f"restore failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    GenerationStore(settings.sqlite_database_path).migrate()
-    typer.echo(f"restored object={object_key} database={settings.sqlite_database_path}")
+
+@app.command("migrate")
+def migrate_command() -> None:
+    """Apply Generation Store migrations up to head."""
+    settings = get_cli_settings()
+    GenerationStore(settings.database_url).migrate()
+    typer.echo("migrated Generation Store to head")
 
 
 def main() -> None:

@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 
-from sombreado.store.geodesic import (
-    approximate_point_to_segment_meters,
-    order_nearby_items,
-    point_to_segment_meters,
-    search_bounds,
-)
+import psycopg
 
 _SEARCH_SQL = """
     SELECT
@@ -24,10 +18,10 @@ _SEARCH_SQL = """
     JOIN dataset_pointers
         ON dataset_pointers.generation_id = dataset_route_versions.generation_id
         AND dataset_pointers.role = 'current'
-    WHERE routes.code LIKE ? COLLATE NOCASE
-       OR routes.name LIKE ? COLLATE NOCASE
+    WHERE routes.code ILIKE %(pattern)s
+       OR routes.name ILIKE %(pattern)s
     ORDER BY routes.code ASC, routes.name ASC
-    LIMIT ?
+    LIMIT %(limit)s
 """
 
 _NEARBY_CANDIDATE_SQL = """
@@ -36,24 +30,28 @@ _NEARBY_CANDIDATE_SQL = """
         dataset_route_versions.route_version_id,
         routes.code,
         routes.name,
-        route_segments.start_lat,
-        route_segments.start_lng,
-        route_segments.end_lat,
-        route_segments.end_lng
-    FROM segment_rtree
-    JOIN route_segments
-        ON route_segments.segment_rowid = segment_rtree.segment_rowid
+        MIN(
+            ST_Distance(
+                route_segments.geom,
+                ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography
+            )
+        ) AS distance_meters
+    FROM dataset_pointers
     JOIN dataset_route_versions
-        ON dataset_route_versions.route_version_id = route_segments.route_version_id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
+        ON dataset_route_versions.generation_id = dataset_pointers.generation_id
     JOIN routes
         ON routes.id = dataset_route_versions.route_id
-    WHERE segment_rtree.min_lng <= ?
-        AND segment_rtree.max_lng >= ?
-        AND segment_rtree.min_lat <= ?
-        AND segment_rtree.max_lat >= ?
+    JOIN route_segments
+        ON route_segments.route_version_id = dataset_route_versions.route_version_id
+    WHERE dataset_pointers.role = 'current'
+      AND ST_DWithin(
+          route_segments.geom,
+          ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography,
+          %(radius)s
+      )
+    GROUP BY routes.id, dataset_route_versions.route_version_id, routes.code, routes.name
+    ORDER BY distance_meters ASC, routes.code ASC, routes.name ASC, routes.id ASC
+    LIMIT %(limit)s
 """
 
 _HINTS_SQL = """
@@ -70,7 +68,7 @@ _HINTS_SQL = """
         AND dataset_pointers.role = 'current'
     WHERE service_directions.route_direction_id IS NOT NULL
       AND service_directions.confidence IN ('high', 'medium')
-      AND route_directions.route_version_id IN ({placeholders})
+      AND route_directions.route_version_id = ANY(%(version_ids)s)
     ORDER BY
         route_directions.route_version_id ASC,
         route_directions.sequence ASC,
@@ -83,7 +81,7 @@ _CURRENT_VERSION_SQL = """
     JOIN dataset_pointers
         ON dataset_pointers.generation_id = dataset_route_versions.generation_id
         AND dataset_pointers.role = 'current'
-    WHERE dataset_route_versions.route_id = ?
+    WHERE dataset_route_versions.route_id = %(route_id)s
 """
 
 _DIRECTION_CHOICES_SQL = """
@@ -98,7 +96,7 @@ _DIRECTION_CHOICES_SQL = """
     JOIN dataset_pointers
         ON dataset_pointers.generation_id = dataset_route_versions.generation_id
         AND dataset_pointers.role = 'current'
-    WHERE route_directions.route_version_id = ?
+    WHERE route_directions.route_version_id = %(route_version_id)s
     ORDER BY route_directions.sequence ASC
 """
 
@@ -116,7 +114,7 @@ _DEPARTURE_LABELS_SQL = """
         AND dataset_pointers.role = 'current'
     WHERE service_directions.route_direction_id IS NOT NULL
       AND service_directions.confidence IN ('high', 'medium')
-      AND route_directions.route_version_id = ?
+      AND route_directions.route_version_id = %(route_version_id)s
     ORDER BY
         route_directions.sequence ASC,
         service_directions.sequence ASC
@@ -130,8 +128,8 @@ _DIRECTION_MEMBERSHIP_SQL = """
     JOIN dataset_pointers
         ON dataset_pointers.generation_id = dataset_route_versions.generation_id
         AND dataset_pointers.role = 'current'
-    WHERE route_directions.route_version_id = ?
-      AND route_directions.id = ?
+    WHERE route_directions.route_version_id = %(route_version_id)s
+      AND route_directions.id = %(route_direction_id)s
 """
 
 _SEGMENTS_SQL = """
@@ -148,8 +146,8 @@ _SEGMENTS_SQL = """
     JOIN dataset_pointers
         ON dataset_pointers.generation_id = dataset_route_versions.generation_id
         AND dataset_pointers.role = 'current'
-    WHERE route_segments.route_version_id = ?
-      AND route_segments.route_direction_id = ?
+    WHERE route_segments.route_version_id = %(route_version_id)s
+      AND route_segments.route_direction_id = %(route_direction_id)s
     ORDER BY route_segments.sequence ASC
 """
 
@@ -183,39 +181,15 @@ class RouteSegmentRow:
     cumulative_distance_meters: float
 
 
-@dataclass(frozen=True)
-class _NearbySegmentCandidate:
-    """Best approximate-distance segment kept per route during nearby filtering."""
-
-    route_id: str
-    route_version_id: str
-    route_code: str
-    route_name: str
-    approx_distance_meters: float
-    start_lat: float
-    start_lng: float
-    end_lat: float
-    end_lng: float
-
-
-@dataclass(frozen=True)
-class _RefinedNearbyRoute:
-    route_id: str
-    route_version_id: str
-    route_code: str
-    route_name: str
-    distance_meters: float
-
-
 def search_route_candidates(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     *,
     query: str,
     limit: int,
 ) -> tuple[RouteCandidateRow, ...]:
     """Return current-generation Route Candidates matching code or name."""
     pattern = f"%{query}%"
-    rows = connection.execute(_SEARCH_SQL, (pattern, pattern, limit)).fetchall()
+    rows = connection.execute(_SEARCH_SQL, {"pattern": pattern, "limit": limit}).fetchall()
     version_ids = [str(row[1]) for row in rows]
     hints_by_version = _direction_hints_by_version(connection, version_ids)
     return tuple(
@@ -231,104 +205,48 @@ def search_route_candidates(
 
 
 def find_nearby_route_candidates(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     *,
     lat: float,
     lng: float,
     radius_meters: float,
     limit: int,
 ) -> tuple[RouteCandidateRow, ...]:
-    """Return current-generation nearby Route Candidates with distance and hints."""
-    min_lng, max_lng, min_lat, max_lat = search_bounds(lat, lng, radius_meters)
-    candidates = connection.execute(
+    """Return current-generation nearby Route Candidates with PostGIS geography distance."""
+    rows = connection.execute(
         _NEARBY_CANDIDATE_SQL,
-        (max_lng, min_lng, max_lat, min_lat),
-    )
-    by_route: dict[str, _NearbySegmentCandidate] = {}
-    for row in candidates:
-        approx_distance = approximate_point_to_segment_meters(
-            lat,
-            lng,
-            float(row[4]),
-            float(row[5]),
-            float(row[6]),
-            float(row[7]),
-        )
-        route_id = str(row[0])
-        current = by_route.get(route_id)
-        if current is None or approx_distance < current.approx_distance_meters:
-            by_route[route_id] = _NearbySegmentCandidate(
-                route_id=route_id,
-                route_version_id=str(row[1]),
-                route_code=str(row[2]),
-                route_name=str(row[3]),
-                approx_distance_meters=approx_distance,
-                start_lat=float(row[4]),
-                start_lng=float(row[5]),
-                end_lat=float(row[6]),
-                end_lng=float(row[7]),
-            )
-
-    refined: list[_RefinedNearbyRoute] = []
-    for candidate in by_route.values():
-        distance = point_to_segment_meters(
-            lat,
-            lng,
-            candidate.start_lat,
-            candidate.start_lng,
-            candidate.end_lat,
-            candidate.end_lng,
-        )
-        if distance <= radius_meters:
-            refined.append(
-                _RefinedNearbyRoute(
-                    route_id=candidate.route_id,
-                    route_version_id=candidate.route_version_id,
-                    route_code=candidate.route_code,
-                    route_name=candidate.route_name,
-                    distance_meters=distance,
-                )
-            )
-
-    # Preserve route_id through ordering so equal codes cannot collapse hits.
-    ordered = list(
-        order_nearby_items(
-            refined,
-            distance_of=lambda row: row.distance_meters,
-            sort_key=lambda row: (row.route_code, row.route_name, row.route_id),
-        )
-    )[:limit]
-
-    version_ids = [row.route_version_id for row in ordered]
+        {"lat": lat, "lng": lng, "radius": radius_meters, "limit": limit},
+    ).fetchall()
+    version_ids = [str(row[1]) for row in rows]
     hints_by_version = _direction_hints_by_version(connection, version_ids)
     return tuple(
         RouteCandidateRow(
-            route_id=row.route_id,
-            route_version_id=row.route_version_id,
-            route_code=row.route_code,
-            route_name=row.route_name,
-            direction_hints=hints_by_version.get(row.route_version_id, ()),
-            distance_meters=row.distance_meters,
+            route_id=str(row[0]),
+            route_version_id=str(row[1]),
+            route_code=str(row[2]),
+            route_name=str(row[3]),
+            direction_hints=hints_by_version.get(str(row[1]), ()),
+            distance_meters=float(row[4]),
         )
-        for row in ordered
+        for row in rows
     )
 
 
-def load_current_route_version_id(connection: sqlite3.Connection, route_id: str) -> str | None:
+def load_current_route_version_id(connection: psycopg.Connection, route_id: str) -> str | None:
     """Return the current-generation route version id for a route, if any."""
-    row = connection.execute(_CURRENT_VERSION_SQL, (route_id,)).fetchone()
+    row = connection.execute(_CURRENT_VERSION_SQL, {"route_id": route_id}).fetchone()
     return None if row is None else str(row[0])
 
 
 def load_direction_choices(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     *,
     route_version_id: str,
 ) -> tuple[DirectionChoiceRow, ...]:
     """Return selectable Direction Choices for a current-generation route version."""
-    directions = connection.execute(_DIRECTION_CHOICES_SQL, (route_version_id,)).fetchall()
+    directions = connection.execute(_DIRECTION_CHOICES_SQL, {"route_version_id": route_version_id}).fetchall()
     labels_by_direction: dict[str, list[str]] = {}
-    for direction_id, label in connection.execute(_DEPARTURE_LABELS_SQL, (route_version_id,)):
+    for direction_id, label in connection.execute(_DEPARTURE_LABELS_SQL, {"route_version_id": route_version_id}):
         bucket = labels_by_direction.setdefault(str(direction_id), [])
         text = str(label)
         if text not in bucket:
@@ -350,7 +268,7 @@ def load_direction_choices(
 
 
 def route_direction_belongs_to_version(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     *,
     route_version_id: str,
     route_direction_id: str,
@@ -358,13 +276,13 @@ def route_direction_belongs_to_version(
     """Return whether the direction belongs to the current-generation route version."""
     row = connection.execute(
         _DIRECTION_MEMBERSHIP_SQL,
-        (route_version_id, route_direction_id),
+        {"route_version_id": route_version_id, "route_direction_id": route_direction_id},
     ).fetchone()
     return row is not None
 
 
 def load_current_route_segments(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     *,
     route_version_id: str,
     route_direction_id: str,
@@ -372,7 +290,7 @@ def load_current_route_segments(
     """Return ordered current-generation route segments for one direction choice."""
     rows = connection.execute(
         _SEGMENTS_SQL,
-        (route_version_id, route_direction_id),
+        {"route_version_id": route_version_id, "route_direction_id": route_direction_id},
     ).fetchall()
     return tuple(
         RouteSegmentRow(
@@ -388,15 +306,13 @@ def load_current_route_segments(
 
 
 def _direction_hints_by_version(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     version_ids: list[str],
 ) -> dict[str, tuple[str, ...]]:
     if not version_ids:
         return {}
-    placeholders = ", ".join("?" for _ in version_ids)
-    sql = _HINTS_SQL.format(placeholders=placeholders)
     hints: dict[str, list[str]] = {version_id: [] for version_id in version_ids}
-    for version_id, label in connection.execute(sql, tuple(version_ids)):
+    for version_id, label in connection.execute(_HINTS_SQL, {"version_ids": version_ids}):
         bucket = hints.setdefault(str(version_id), [])
         text = str(label)
         if text not in bucket:

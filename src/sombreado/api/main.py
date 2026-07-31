@@ -19,11 +19,11 @@ from sombreado.store import GenerationStore
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_api_settings()
-    store = GenerationStore(settings.sqlite_database_path)
+    store = GenerationStore(settings.database_url)
     store.migrate()
     get_logger(__name__).info(
         "Applied Generation Store migrations database=%s current=%s",
-        settings.sqlite_database_path,
+        settings.database_url,
         store.current_generation(),
     )
     yield
