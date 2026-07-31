@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 .env
 data/
+.scratch/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal

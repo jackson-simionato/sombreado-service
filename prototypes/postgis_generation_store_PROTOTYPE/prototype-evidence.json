@@ -1,0 +1,69 @@
+{
+  "database": "sombreado_postgis_generation_prototype",
+  "question": "Can a cheap Postgres/PostGIS spike demonstrate reusable Generation Store semantics plus PostGIS-only nearby enough to lock Neon store design?",
+  "recorded_at": "2026-07-31T14:19:31.859031+00:00",
+  "results": {
+    "lease": {
+      "facts": {
+        "lease_holder": "holder-d",
+        "orphan_staging_after_reclaim": "False"
+      },
+      "failures": [],
+      "passed": true
+    },
+    "nearby": {
+      "facts": {
+        "gen_a_codes": "1A",
+        "gen_a_distance_m": "0.000",
+        "gen_b_codes": "1B",
+        "plan": "Nested Loop  (cost=0.42..28.96 rows=1 width=32) |   Join Filter: (segment.generation_id = pointer.generation_id) |   ->  Index Scan using dataset_pointers_pkey ",
+        "plan_uses_gist": "True",
+        "radius_meters": "1200.0",
+        "spatial_model": "geography(LINESTRING,4326) + ST_DWithin + GIST"
+      },
+      "failures": [],
+      "passed": true
+    },
+    "publication": {
+      "facts": {
+        "current": "gen-a",
+        "has_gen_a": "True",
+        "has_gen_empty": "False",
+        "previous": "None"
+      },
+      "failures": [],
+      "passed": true
+    },
+    "retention": {
+      "facts": {
+        "current": "gen-c",
+        "has_gen_a": "False",
+        "has_gen_b": "True",
+        "has_gen_c": "True",
+        "previous": "gen-b"
+      },
+      "failures": [],
+      "passed": true
+    }
+  },
+  "spatial_model": "geography(LINESTRING,4326) + ST_DWithin + GIST",
+  "store_snapshot": {
+    "current": "gen-b",
+    "database": "sombreado_postgis_generation_prototype",
+    "generations": [
+      [
+        "gen-a",
+        "published"
+      ],
+      [
+        "gen-b",
+        "published"
+      ]
+    ],
+    "lease_holder": null,
+    "postgis_version": "3.4 USE_GEOS=1 USE_PROJ=1 USE_STATS=1",
+    "previous": "gen-a",
+    "spatial_model": "geography(LINESTRING,4326) + ST_DWithin + GIST"
+  },
+  "verdict": "postgis-generation-store-credible"
+}
