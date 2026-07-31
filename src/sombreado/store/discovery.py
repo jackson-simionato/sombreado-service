@@ -1,0 +1,294 @@
+"""Current-generation Route Search, Nearby Route Candidates, and Direction Choices."""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+
+from sombreado.store.geodesic import (
+    approximate_point_to_segment_meters,
+    order_nearby_rows,
+    point_to_segment_meters,
+    search_bounds,
+)
+
+_SEARCH_SQL = """
+    SELECT
+        routes.id,
+        dataset_route_versions.route_version_id,
+        routes.code,
+        routes.name
+    FROM routes
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_id = routes.id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE routes.code LIKE ? COLLATE NOCASE
+       OR routes.name LIKE ? COLLATE NOCASE
+    ORDER BY routes.code ASC, routes.name ASC
+    LIMIT ?
+"""
+
+_NEARBY_CANDIDATE_SQL = """
+    SELECT
+        routes.id,
+        dataset_route_versions.route_version_id,
+        routes.code,
+        routes.name,
+        route_segments.start_lat,
+        route_segments.start_lng,
+        route_segments.end_lat,
+        route_segments.end_lng
+    FROM segment_rtree
+    JOIN route_segments
+        ON route_segments.segment_rowid = segment_rtree.segment_rowid
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_segments.route_version_id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    JOIN routes
+        ON routes.id = dataset_route_versions.route_id
+    WHERE segment_rtree.min_lng <= ?
+        AND segment_rtree.max_lng >= ?
+        AND segment_rtree.min_lat <= ?
+        AND segment_rtree.max_lat >= ?
+"""
+
+_HINTS_SQL = """
+    SELECT
+        route_directions.route_version_id,
+        service_directions.departure_label
+    FROM service_directions
+    JOIN route_directions
+        ON route_directions.id = service_directions.route_direction_id
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_directions.route_version_id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE service_directions.route_direction_id IS NOT NULL
+      AND service_directions.confidence IN ('high', 'medium')
+      AND route_directions.route_version_id IN ({placeholders})
+    ORDER BY
+        route_directions.route_version_id ASC,
+        route_directions.sequence ASC,
+        service_directions.sequence ASC
+"""
+
+_CURRENT_VERSION_SQL = """
+    SELECT dataset_route_versions.route_version_id
+    FROM dataset_route_versions
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE dataset_route_versions.route_id = ?
+"""
+
+_DIRECTION_CHOICES_SQL = """
+    SELECT
+        route_directions.id,
+        route_directions.sequence,
+        route_directions.name,
+        route_directions.direction_kind
+    FROM route_directions
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_directions.route_version_id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE route_directions.route_version_id = ?
+    ORDER BY route_directions.sequence ASC
+"""
+
+_DEPARTURE_LABELS_SQL = """
+    SELECT
+        service_directions.route_direction_id,
+        service_directions.departure_label
+    FROM service_directions
+    JOIN route_directions
+        ON route_directions.id = service_directions.route_direction_id
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_directions.route_version_id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE service_directions.route_direction_id IS NOT NULL
+      AND service_directions.confidence IN ('high', 'medium')
+      AND route_directions.route_version_id = ?
+    ORDER BY
+        route_directions.sequence ASC,
+        service_directions.sequence ASC
+"""
+
+
+@dataclass(frozen=True)
+class RouteCandidateRow:
+    route_id: str
+    route_version_id: str
+    route_code: str
+    route_name: str
+    direction_hints: tuple[str, ...]
+    distance_meters: float | None = None
+
+
+@dataclass(frozen=True)
+class DirectionChoiceRow:
+    route_direction_id: str
+    sequence: int
+    name: str
+    direction_kind: str | None
+    departure_labels: tuple[str, ...]
+
+
+def search_route_candidates(
+    connection: sqlite3.Connection,
+    *,
+    query: str,
+    limit: int,
+) -> tuple[RouteCandidateRow, ...]:
+    """Return current-generation Route Candidates matching code or name."""
+    pattern = f"%{query}%"
+    rows = connection.execute(_SEARCH_SQL, (pattern, pattern, limit)).fetchall()
+    version_ids = [str(row[1]) for row in rows]
+    hints_by_version = _direction_hints_by_version(connection, version_ids)
+    return tuple(
+        RouteCandidateRow(
+            route_id=str(row[0]),
+            route_version_id=str(row[1]),
+            route_code=str(row[2]),
+            route_name=str(row[3]),
+            direction_hints=hints_by_version.get(str(row[1]), ()),
+        )
+        for row in rows
+    )
+
+
+def find_nearby_route_candidates(
+    connection: sqlite3.Connection,
+    *,
+    lat: float,
+    lng: float,
+    radius_meters: float,
+    limit: int,
+) -> tuple[RouteCandidateRow, ...]:
+    """Return current-generation nearby Route Candidates with distance and hints."""
+    min_lng, max_lng, min_lat, max_lat = search_bounds(lat, lng, radius_meters)
+    candidates = connection.execute(
+        _NEARBY_CANDIDATE_SQL,
+        (max_lng, min_lng, max_lat, min_lat),
+    )
+    by_route: dict[str, tuple[str, str, str, float, float, float, float, float]] = {}
+    for row in candidates:
+        approx_distance = approximate_point_to_segment_meters(
+            lat,
+            lng,
+            float(row[4]),
+            float(row[5]),
+            float(row[6]),
+            float(row[7]),
+        )
+        route_id = str(row[0])
+        current = by_route.get(route_id)
+        if current is None or approx_distance < current[3]:
+            by_route[route_id] = (
+                str(row[1]),
+                str(row[2]),
+                str(row[3]),
+                approx_distance,
+                float(row[4]),
+                float(row[5]),
+                float(row[6]),
+                float(row[7]),
+            )
+
+    refined: list[tuple[str, str, str, str, float]] = []
+    for route_id, (version_id, code, name, _approx, start_lat, start_lng, end_lat, end_lng) in by_route.items():
+        distance = point_to_segment_meters(
+            lat,
+            lng,
+            start_lat,
+            start_lng,
+            end_lat,
+            end_lng,
+        )
+        if distance <= radius_meters:
+            refined.append((route_id, version_id, code, name, distance))
+
+    ordered_codes = order_nearby_rows(
+        [(code, name, distance) for _route_id, _version_id, code, name, distance in refined]
+    )
+    by_code = {code: (route_id, version_id, name, distance) for route_id, version_id, code, name, distance in refined}
+    ordered = []
+    for code, _name, distance in ordered_codes:
+        route_id, version_id, name, _distance = by_code[code]
+        ordered.append((route_id, version_id, code, name, distance))
+        if len(ordered) >= limit:
+            break
+
+    version_ids = [version_id for _route_id, version_id, _code, _name, _distance in ordered]
+    hints_by_version = _direction_hints_by_version(connection, version_ids)
+    return tuple(
+        RouteCandidateRow(
+            route_id=route_id,
+            route_version_id=version_id,
+            route_code=code,
+            route_name=name,
+            direction_hints=hints_by_version.get(version_id, ()),
+            distance_meters=distance,
+        )
+        for route_id, version_id, code, name, distance in ordered
+    )
+
+
+def load_current_route_version_id(connection: sqlite3.Connection, route_id: str) -> str | None:
+    """Return the current-generation route version id for a route, if any."""
+    row = connection.execute(_CURRENT_VERSION_SQL, (route_id,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def load_direction_choices(
+    connection: sqlite3.Connection,
+    *,
+    route_version_id: str,
+) -> tuple[DirectionChoiceRow, ...]:
+    """Return selectable Direction Choices for a current-generation route version."""
+    directions = connection.execute(_DIRECTION_CHOICES_SQL, (route_version_id,)).fetchall()
+    labels_by_direction: dict[str, list[str]] = {}
+    for direction_id, label in connection.execute(_DEPARTURE_LABELS_SQL, (route_version_id,)):
+        bucket = labels_by_direction.setdefault(str(direction_id), [])
+        text = str(label)
+        if text not in bucket:
+            bucket.append(text)
+
+    rows = [
+        DirectionChoiceRow(
+            route_direction_id=str(row[0]),
+            sequence=int(row[1]),
+            name=str(row[2]),
+            direction_kind=None if row[3] is None else str(row[3]),
+            departure_labels=tuple(labels_by_direction.get(str(row[0]), [])),
+        )
+        for row in directions
+    ]
+    kind_order = {"ida": 0, "volta": 1, None: 2}
+    rows.sort(key=lambda direction: (kind_order.get(direction.direction_kind, 2), direction.sequence))
+    return tuple(rows)
+
+
+def _direction_hints_by_version(
+    connection: sqlite3.Connection,
+    version_ids: list[str],
+) -> dict[str, tuple[str, ...]]:
+    if not version_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in version_ids)
+    sql = _HINTS_SQL.format(placeholders=placeholders)
+    hints: dict[str, list[str]] = {version_id: [] for version_id in version_ids}
+    for version_id, label in connection.execute(sql, tuple(version_ids)):
+        bucket = hints.setdefault(str(version_id), [])
+        text = str(label)
+        if text not in bucket:
+            bucket.append(text)
+    return {version_id: tuple(labels) for version_id, labels in hints.items()}

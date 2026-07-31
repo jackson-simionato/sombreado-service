@@ -11,6 +11,14 @@ from typing import Iterator
 from alembic import command
 from alembic.config import Config
 
+from sombreado.store.discovery import (
+    DirectionChoiceRow,
+    RouteCandidateRow,
+    find_nearby_route_candidates,
+    load_current_route_version_id,
+    load_direction_choices,
+    search_route_candidates,
+)
 from sombreado.store.generation_writes import (
     CanonicalRows,
     delete_generation,
@@ -25,7 +33,14 @@ from sombreado.store.nearby import NearbyRoute, find_nearby_routes
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ALEMBIC_INI = _REPO_ROOT / "alembic.ini"
 
-__all__ = ["CanonicalRows", "GenerationStore", "NearbyRoute", "ScrapeLeaseHeldError"]
+__all__ = [
+    "CanonicalRows",
+    "DirectionChoiceRow",
+    "GenerationStore",
+    "NearbyRoute",
+    "RouteCandidateRow",
+    "ScrapeLeaseHeldError",
+]
 
 
 class ScrapeLeaseHeldError(RuntimeError):
@@ -286,6 +301,39 @@ class GenerationStore:
                 lng=lng,
                 radius_meters=radius_meters,
             )
+
+    def search_route_candidates(self, *, query: str, limit: int) -> tuple[RouteCandidateRow, ...]:
+        """Return current-generation Route Candidates matching code or name."""
+        with self._connect() as connection:
+            return search_route_candidates(connection, query=query, limit=limit)
+
+    def find_nearby_route_candidates(
+        self,
+        *,
+        lat: float,
+        lng: float,
+        radius_meters: float,
+        limit: int,
+    ) -> tuple[RouteCandidateRow, ...]:
+        """Return current-generation nearby Route Candidates with distance and hints."""
+        with self._connect() as connection:
+            return find_nearby_route_candidates(
+                connection,
+                lat=lat,
+                lng=lng,
+                radius_meters=radius_meters,
+                limit=limit,
+            )
+
+    def current_route_version_id(self, route_id: str) -> str | None:
+        """Return the current-generation route version id for a route, if any."""
+        with self._connect() as connection:
+            return load_current_route_version_id(connection, route_id)
+
+    def direction_choices(self, *, route_version_id: str) -> tuple[DirectionChoiceRow, ...]:
+        """Return Direction Choices for a current-generation route version."""
+        with self._connect() as connection:
+            return load_direction_choices(connection, route_version_id=route_version_id)
 
     def record_scrape_run(
         self,
