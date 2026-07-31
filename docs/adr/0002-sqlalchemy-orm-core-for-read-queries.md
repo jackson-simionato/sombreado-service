@@ -1,7 +1,15 @@
 # SQLAlchemy ORM/Core for Read Queries
 
-Sombreado Service read queries will use SQLAlchemy ORM/Core expressions instead of textual SQL. The service remains read-only over scraper-owned database tables, and Pydantic remains the API/read DTO validation boundary.
+## Status
 
-The mapped SQLAlchemy classes represent database records. API response models and read DTOs stay in `app.schemas`; we will not merge the database mapping and response contracts with SQLModel or similar dual-purpose models.
+Superseded for passenger reads by the Generation Store SQLite path. Kept for historical PostGIS `RouteReadService` code until that module is deleted.
 
-This keeps route discovery and geometry reads tied to typed table and column references while still doing filtering, sorting, limiting, PostGIS distance predicates, and departure-label aggregation in PostgreSQL. Raw textual SQL is not part of application read code. Documentation and historical plans may still contain SQL snippets, but code review should reject new app reads built with `text("""...""")`.
+## Historical decision
+
+Sombreado Service read queries used SQLAlchemy ORM/Core expressions instead of textual SQL while the service was read-only over scraper-owned PostGIS tables. Pydantic remained the API/read DTO validation boundary.
+
+Mapped SQLAlchemy classes represented database records. API response models and read DTOs stayed separate from ORM mappings.
+
+## Current passenger reads
+
+Passenger Route Discovery, Direction Choices, Route Geometry, and Advice read the Generation Store through parameterized SQLite SQL in `sombreado.store` (for example `discovery.py`). Do not reintroduce PostGIS / SQLAlchemy passenger reads. New passenger-facing store reads should stay on the SQLite `current` pointer seam.

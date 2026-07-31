@@ -1,11 +1,11 @@
 # Sombreado Service
 
-This context describes the backend that serves onboard sun-side guidance. **Route Discovery** and **Direction Choices** already read the **Generation Store**; Route Geometry and Advice still use scraper-owned route data until that cutover slice.
+This context describes the backend that serves onboard sun-side guidance. Passenger **Route Discovery**, **Direction Choices**, **Route Geometry**, and **Advice** read **Current Route Data** from the **Generation Store** `current` pointer.
 
 ## Language
 
 **Sombreado Service**:
-The installable backend package with two process entry points: the passenger-facing browser API and the scrape CLI. **Route Discovery** and **Direction Choices** read **Current Route Data** from the **Generation Store** `current` pointer; Advice and Route Geometry still use the **Scraper Database** until that cutover slice.
+The installable backend package with two process entry points: the passenger-facing browser API and the scrape CLI. Passenger reads use **Current Route Data** from the **Generation Store** `current` pointer.
 _Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
 
 **Scrape CLI**:
@@ -13,7 +13,7 @@ The separate OS-process entry point that fetches Consórcio Fênix data, validat
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Generation Store**:
-The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Passenger **Route Discovery** and **Direction Choices** read only through the `current` pointer; Route Geometry and Advice still use the Scraper Database until that cutover slice.
+The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Passenger reads (discovery, directions, geometry, advice) use only the `current` pointer.
 _Avoid_: Scraper Database, app database, SpatiaLite
 
 **Generation Store Backup**:
@@ -29,11 +29,11 @@ The singleton DB-backed mutual-exclusion record that prevents overlapping scrape
 _Avoid_: Distributed lock service, API request lock
 
 **Scraper Database**:
-The PostGIS database owned by the Consorcio Fenix scraper and consumed read-only by the Sombreado Service API until centralized SQLite cutover.
+Retired passenger-read seam. Historically the PostGIS database owned by the Consorcio Fenix scraper; the API no longer depends on it. Remains relevant only until cutover retires the standalone scraper deployment.
 _Avoid_: App database, service database, Generation Store
 
 **Reader Database Role**:
-The separate database user used by the Sombreado Service API with SELECT-only access to scraper-owned tables (current passenger-read path).
+Retired passenger-read seam. Historically the SELECT-only database user used by the API against scraper-owned tables; the API no longer uses this role.
 _Avoid_: Migration user, scraper user, owner role
 
 **Render Deployment**:
@@ -45,11 +45,11 @@ A secret used by GitHub Actions to trigger or authenticate deployment automation
 _Avoid_: Runtime secret, application setting
 
 **Runtime Secret**:
-A secret consumed by the running Sombreado Service inside Render.
+A secret consumed by the running Sombreado Service (for example Object Storage credentials on the VM). The passenger API datastore path is `SQLITE_DATABASE_PATH`, not a PostGIS `DATABASE_URL`.
 _Avoid_: Pipeline secret, CI variable
 
 **Current Route Data**:
-Passenger-usable route data addressed by the **Generation Store** `current` pointer for **Route Discovery** and **Direction Choices**, and still by scraper current route/version records for Route Geometry and Advice until that cutover slice.
+Passenger-usable route data addressed by the **Generation Store** `current` pointer for discovery, directions, geometry, and advice.
 _Avoid_: Historical route data, archived route versions
 
 **Route Discovery**:
@@ -123,13 +123,13 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 ## Relationships
 
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
-- **Route Discovery** and **Direction Choices** read the **Generation Store** `current` pointer; Route Geometry and Advice still consume the **Scraper Database** through the **Reader Database Role**.
+- Passenger **Route Discovery**, **Direction Choices**, **Route Geometry**, and **Advice** read only the **Generation Store** `current` pointer.
 - The **Scrape CLI** owns live Consórcio fetch, migrate, and publish against the **Generation Store**.
 - A **Generation Store Backup** job is independent of scrape publish; failure alerts without blocking publish or API availability.
 - Aside-and-restore installs the newest integrity-checked **Generation Store Backup** object after moving a bad live file aside; a fresh scrape is used only when no usable backup exists.
 - A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
 - Incomplete staging never auto-publishes; failure retains the last successful current (+ previous when present).
-- A **Reader Database Role** must not mutate scraper-owned route data.
+- The API runtime path does not use the retired **Reader Database Role** or **Scraper Database**.
 - The **Scrape CLI** must not run inside the API request path.
 - **Route Discovery** exposes only **Current Route Data**.
 - **Route Discovery** supports **Route Search** and a **Nearby Route Filter**.
@@ -162,12 +162,12 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - A **Seat-area Recommendation** is produced by **Advice** and is not derived by the browser client.
 - A **Render Deployment** runs the **Sombreado Service** and is triggered by GitHub Actions after CI passes on `main`.
 - A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it.
-- A **Runtime Secret** belongs in Render when the running service needs it.
+- A **Runtime Secret** belongs with the running service when that process needs it.
 
 ## Example dialogue
 
-> **Dev:** "Should the **Sombreado Service** run scraper migrations before deployment?"
-> **Domain expert:** "No — the **Scraper Database** is owned by the scraper; the service only connects through the **Reader Database Role**."
+> **Dev:** "Should the passenger API still connect to PostGIS for geometry?"
+> **Domain expert:** "No — **Route Geometry** and **Advice** read **Current Route Data** from the **Generation Store** `current` pointer, same as discovery."
 >
 > **Dev:** "Should **Route Discovery** let clients browse old route versions?"
 > **Domain expert:** "No — passengers only need **Current Route Data**; version IDs may appear only so advisory requests can refer to the selected current route direction."
@@ -198,10 +198,10 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 ## Flagged ambiguities
 
-- The **Generation Store** is the passenger read path for **Route Discovery** and **Direction Choices**; Route Geometry and Advice still use the **Reader Database Role** / **Scraper Database** until that cutover slice.
-- "database user" means the **Reader Database Role** for this service's API, not the scraper's ingestion or migration role.
+- The **Generation Store** is the passenger read path for discovery, directions, geometry, and advice.
+- **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
 - "deploy" means GitHub Actions triggering the **Render Deployment** after CI passes on `main`, not Render auto-deploying before CI.
-- `DATABASE_URL` is a **Runtime Secret**, not a **Pipeline Secret**.
+- `SQLITE_DATABASE_PATH` is the passenger API datastore setting; legacy `DATABASE_URL` is not part of the passenger runtime path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.
 - "pagination" means **Route Candidate Limit** only, not offset or cursor pagination.
