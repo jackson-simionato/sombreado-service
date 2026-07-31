@@ -1,26 +1,22 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from sombreado.api.deps import get_current_route_service, get_session
+from sombreado.api.deps import get_current_route_service
 from sombreado.api.errors import PublicApiError, parse_public_uuid
 from sombreado.api.mapping import to_direction_choices, to_polyline
 from sombreado.api.schemas import (
     RouteDirectionsResponse,
     RouteGeometryResponse,
 )
+from sombreado.domain.geometry import flatten_route_polyline
 from sombreado.route_reads.current import CurrentRouteReadService
-from sombreado.route_reads.service import RouteReadService, flatten_route_polyline
 
 router = APIRouter(prefix="/v1", tags=["routes"])
 
-# Re-export for tests that override the SQLite discovery dependency by this name.
+# Re-export for tests that override the SQLite passenger-read dependency by this name.
 get_discovery_service = get_current_route_service
-
-
-async def get_route_service(session: Annotated[AsyncSession, Depends(get_session)]) -> RouteReadService:
-    return RouteReadService(session)
+get_route_service = get_current_route_service
 
 
 @router.get("/routes/{route_id}/directions", response_model=RouteDirectionsResponse)
@@ -54,7 +50,7 @@ async def route_directions(
 async def route_geometry(
     route_id: str,
     route_direction_id: str,
-    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+    route_service: Annotated[CurrentRouteReadService, Depends(get_current_route_service)],
     route_version_id_text: Annotated[str, Query(alias="routeVersionId")],
 ) -> RouteGeometryResponse:
     parsed_route_id = parse_public_uuid(route_id)

@@ -9,7 +9,6 @@ from sombreado.domain.geometry import parse_linestring_wkt
 from sombreado.domain.schemas import (
     CandidateRouteDirection,
     DirectionChoice,
-    LatLngPoint,
     LightweightRouteDirection,
     RouteCandidate,
     RouteSegment,
@@ -542,17 +541,6 @@ def _load_current_route_segments_statement():
         )
         .order_by(RouteSegmentRecord.sequence.asc())
     )
-
-
-def flatten_route_polyline(segments: list[RouteSegment]) -> list[LatLngPoint]:
-    polyline: list[LatLngPoint] = []
-    for segment in segments:
-        for lng, lat in segment.coordinates:
-            point = LatLngPoint(lat=lat, lng=lng)
-            if polyline and polyline[-1] == point:
-                continue
-            polyline.append(point)
-    return polyline
 
 
 def _route_summaries_from_rows(rows) -> list[RouteSummary]:

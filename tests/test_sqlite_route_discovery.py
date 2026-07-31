@@ -1,4 +1,4 @@
-"""Browser contract for Route Search, Nearby, and Direction Choices via SQLite current."""
+"""Browser contract for passenger reads via SQLite current (discovery through advice)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,10 @@ from pytest import approx
 
 from sombreado.api.main import create_app
 from sombreado.config import Settings, get_settings
+from sombreado.store.discovery import (
+    load_current_route_segments,
+    route_direction_belongs_to_version,
+)
 from sombreado.store.fixture_publish import publish_fixture
 from sombreado.store.generation import GenerationStore
 from sombreado.store.sample_data import sample_generation_rows
@@ -254,6 +258,172 @@ async def test_direction_choices_match_browser_contract_from_sqlite(sqlite_api):
     }
 
 
+def test_store_geometry_reads_current_segments_and_membership(tmp_path: Path):
+    store = GenerationStore(tmp_path / "routes.sqlite")
+    publish_fixture(store, _contract_rows(suffix="a", dual_directions=True), generation_id="gen-a")
+    version_id = _id("version-a")
+    direction_ida = _id("direction-a-ida")
+
+    with store.connection() as connection:
+        assert route_direction_belongs_to_version(
+            connection,
+            route_version_id=version_id,
+            route_direction_id=direction_ida,
+        )
+        assert not route_direction_belongs_to_version(
+            connection,
+            route_version_id=version_id,
+            route_direction_id=_id("direction-missing"),
+        )
+        segments = load_current_route_segments(
+            connection,
+            route_version_id=version_id,
+            route_direction_id=direction_ida,
+        )
+
+    assert [row.public_id for row in segments] == [_id("segment-a-a"), _id("segment-a-b")]
+    assert [row.sequence for row in segments] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_geometry_returns_frontend_polyline_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+    direction_id = _id("direction-a-ida")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/v1/routes/{route_id}/directions/{direction_id}/geometry",
+            params={"routeVersionId": version_id},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "routeId": route_id,
+        "routeVersionId": version_id,
+        "routeDirectionId": direction_id,
+        "polyline": [
+            {"lat": -27.58967698020161, "lng": -48.53424287871695},
+            {"lat": -27.58967384329425, "lng": -48.53429001602508},
+            {"lat": -27.58967875783012, "lng": -48.53423370052804},
+            {"lat": -27.58966823891881, "lng": -48.53428961785253},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_preview_advice_uses_current_geometry_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+    direction_id = _id("direction-a-ida")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": route_id,
+                "routeVersionId": version_id,
+                "routeDirectionId": direction_id,
+                "mode": "preview",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00Z",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "advice"
+    assert body["mode"] == "preview"
+    assert body["horizon"] == "remainingRoute"
+    assert body["routeId"] == route_id
+    assert body["routeVersionId"] == version_id
+    assert body["routeDirectionId"] == direction_id
+    assert body["directSunExposure"] in {"left", "right", "front", "back", "overhead", "none"}
+    assert body["recommendedSeatArea"] in {"left", "right", "front", "back", "neutral"}
+    assert body["sunCondition"] in {"night", "lowSun", "daylight", "overhead"}
+    assert body["position"] == {
+        "lat": -27.58967698020161,
+        "lng": -48.53424287871695,
+        "source": "directionStart",
+    }
+
+
+@pytest.mark.asyncio
+async def test_onboard_advice_uses_current_geometry_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+    direction_id = _id("direction-a-ida")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": route_id,
+                "routeVersionId": version_id,
+                "routeDirectionId": direction_id,
+                "mode": "onboard",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00Z",
+                "location": {
+                    "lat": _ON_ROUTE_LAT,
+                    "lng": _ON_ROUTE_LNG,
+                    "observedAt": "2026-01-15T15:00:00Z",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "advice"
+    assert body["mode"] == "onboard"
+    assert body["horizon"] == "upcoming"
+    assert body["position"]["source"] == "liveLocation"
+    assert body["position"]["distanceFromRouteMeters"] == approx(0.0, abs=1.0)
+
+
+@pytest.mark.asyncio
+async def test_full_passenger_flow_without_scraper_database(sqlite_api):
+    app, _store, _path = sqlite_api
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        search = await client.get("/v1/route-candidates/search", params={"query": "3A"})
+        assert search.status_code == 200
+        candidate = search.json()["routes"][0]
+        route_id = candidate["routeId"]
+        version_id = candidate["routeVersionId"]
+
+        directions = await client.get(
+            f"/v1/routes/{route_id}/directions",
+            params={"routeVersionId": version_id},
+        )
+        assert directions.status_code == 200
+        direction_id = directions.json()["directions"][0]["routeDirectionId"]
+
+        geometry = await client.get(
+            f"/v1/routes/{route_id}/directions/{direction_id}/geometry",
+            params={"routeVersionId": version_id},
+        )
+        assert geometry.status_code == 200
+        assert len(geometry.json()["polyline"]) >= 2
+
+        advice = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": route_id,
+                "routeVersionId": version_id,
+                "routeDirectionId": direction_id,
+                "mode": "preview",
+                "horizon": "upcoming",
+                "observedAt": "2026-01-15T15:00:00Z",
+            },
+        )
+        assert advice.status_code == 200
+        assert advice.json()["status"] == "advice"
+
+
 @pytest.mark.asyncio
 async def test_discovery_reads_never_expose_staging_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     database_path = tmp_path / "routes.sqlite"
@@ -276,6 +446,21 @@ async def test_discovery_reads_never_expose_staging_generation(tmp_path: Path, m
                 params={"lat": _ON_ROUTE_LAT, "lng": _ON_ROUTE_LNG, "radiusMeters": 50},
             )
             staging_directions = await client.get(f"/v1/routes/{_id('route-b')}/directions")
+            staging_geometry = await client.get(
+                f"/v1/routes/{_id('route-b')}/directions/{_id('direction-b-ida')}/geometry",
+                params={"routeVersionId": _id("version-b")},
+            )
+            staging_advice = await client.post(
+                "/v1/advice",
+                json={
+                    "routeId": _id("route-b"),
+                    "routeVersionId": _id("version-b"),
+                    "routeDirectionId": _id("direction-b-ida"),
+                    "mode": "preview",
+                    "horizon": "remainingRoute",
+                    "observedAt": "2026-01-15T15:00:00Z",
+                },
+            )
     finally:
         get_settings.cache_clear()
 
@@ -283,6 +468,10 @@ async def test_discovery_reads_never_expose_staging_generation(tmp_path: Path, m
     assert [route["routeCode"] for route in nearby.json()["routes"]] == ["3A"]
     assert staging_directions.status_code == 404
     assert staging_directions.json()["error"]["code"] == "routeNotFound"
+    assert staging_geometry.status_code == 404
+    assert staging_geometry.json()["error"]["code"] == "routeNotFound"
+    assert staging_advice.status_code == 404
+    assert staging_advice.json()["error"]["code"] == "routeNotFound"
 
 
 def test_settings_accept_sqlite_database_path_for_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

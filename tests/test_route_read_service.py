@@ -4,8 +4,9 @@ from uuid import UUID
 import pytest
 from sqlalchemy.sql.elements import TextClause
 
+from sombreado.domain.geometry import flatten_route_polyline
 from sombreado.domain.schemas import RouteSegment
-from sombreado.route_reads.service import RouteReadService, flatten_route_polyline
+from sombreado.route_reads.service import RouteReadService
 from sombreado.store.models import RouteDirectionRecord, ServiceDirectionRecord
 
 
