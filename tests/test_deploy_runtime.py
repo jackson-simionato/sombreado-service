@@ -483,10 +483,10 @@ def test_systemd_units_point_at_release_symlink_and_harden_filesystem():
     assert "Unit=sombreado-backup.service" in backup_timer
 
 
-def test_env_example_keeps_sqlite_outside_release_tree():
+def test_env_example_uses_database_url_for_generation_store():
     env_example = (DEPLOY_DIR / "env.example").read_text(encoding="utf-8")
-    assert "SQLITE_DATABASE_PATH=/var/lib/sombreado/routes.sqlite" in env_example
-    assert "/opt/sombreado" not in env_example.split("SQLITE_DATABASE_PATH", 1)[1].splitlines()[0]
+    assert "DATABASE_URL=" in env_example
+    assert "SQLITE_DATABASE_PATH=" not in env_example
 
 
 def test_ci_pins_known_hosts_and_uses_fixed_activator():

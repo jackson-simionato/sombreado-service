@@ -1,29 +1,37 @@
-"""Versioned SQLite schema migrations for the Generation Store."""
-
-import sqlite3
-from pathlib import Path
+"""Versioned PostGIS schema migrations for the Generation Store."""
 
 from sombreado.store.generation import GenerationStore
 
 
-def test_migrate_applies_alembic_revision_and_is_idempotent(tmp_path: Path):
-    database_path = tmp_path / "routes.sqlite"
-    store = GenerationStore(database_path)
-
+def test_migrate_applies_alembic_revision_and_is_idempotent(store: GenerationStore):
     store.migrate()
     store.migrate()
 
-    with sqlite3.connect(database_path) as connection:
+    with store.connection() as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        tables = {
-            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
-        }
-
-    assert version == ("20260731_0003",)
-    assert "dataset_generations" in tables
-    assert "dataset_pointers" in tables
-    assert "generation_routes" in tables
-    assert "scrape_lease" in tables
-    assert "scrape_runs" in tables
-    assert "segment_rtree" in tables
+        assert version == ("20260731_0001",)
+        for table in (
+            "dataset_generations",
+            "dataset_pointers",
+            "generation_routes",
+            "scrape_lease",
+            "scrape_runs",
+            "route_segments",
+        ):
+            present = connection.execute(
+                "SELECT to_regclass(%(name)s) IS NOT NULL",
+                {"name": f"public.{table}"},
+            ).fetchone()[0]
+            assert present, table
+        rtree = connection.execute("SELECT to_regclass('public.segment_rtree') IS NOT NULL").fetchone()[0]
+        assert not rtree
+        gist = connection.execute(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'route_segments_geom_gix'
+            )
+            """
+        ).fetchone()[0]
+        assert gist
     assert store.current_generation() is None

@@ -151,11 +151,10 @@ async def test_health_live():
     assert response.json() == {"status": "ok"}
 
 
-def test_health_ready_reports_store_usable(tmp_path, monkeypatch):
+def test_health_ready_reports_store_usable(database_url, monkeypatch):
     from starlette.testclient import TestClient
 
-    database_path = tmp_path / "ready.sqlite"
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("DATABASE_URL", database_url)
     from sombreado.config import get_settings
 
     get_settings.cache_clear()
@@ -170,28 +169,19 @@ def test_health_ready_reports_store_usable(tmp_path, monkeypatch):
     assert "currentGeneration" in body
 
 
-def test_health_ready_returns_503_when_migrations_absent(tmp_path, monkeypatch):
+def test_health_ready_returns_503_when_migrations_absent(database_url, monkeypatch):
     from starlette.testclient import TestClient
 
     from sombreado.api.deps import get_generation_store
     from sombreado.config import get_settings
     from sombreado.store import GenerationStore
 
-    migrated_path = (tmp_path / "migrated.sqlite").resolve()
-    empty_revision_path = (tmp_path / "empty-revision.sqlite").resolve()
-
-    # env.py prefers SQLITE_DATABASE_PATH over Config sqlalchemy.url during migrate.
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(empty_revision_path))
+    monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
-    empty_store = GenerationStore(empty_revision_path)
-    empty_store.migrate()
-    with empty_store.connection() as connection:
-        connection.execute("DELETE FROM alembic_version")
-        connection.commit()
+    # Separate unmigrated DB so lifespan migrate on DATABASE_URL cannot heal readiness.
+    empty_url = database_url.rsplit("/", 1)[0] + "/sombreado_test_unmigrated"
+    empty_store = GenerationStore(empty_url)
 
-    # App lifespan migrates a separate DB; readiness uses the empty-revision store.
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(migrated_path))
-    get_settings.cache_clear()
     app = create_app()
     app.dependency_overrides[get_generation_store] = lambda: empty_store
 
@@ -201,22 +191,20 @@ def test_health_ready_returns_503_when_migrations_absent(tmp_path, monkeypatch):
     assert response.status_code == 503
 
 
-def test_health_ready_returns_503_when_store_unusable(tmp_path, monkeypatch):
+def test_health_ready_returns_503_when_store_unusable(database_url, monkeypatch):
     from starlette.testclient import TestClient
 
     from sombreado.api.deps import get_generation_store
     from sombreado.config import get_settings
     from sombreado.store import GenerationStore
 
-    migrated_path = tmp_path / "migrated.sqlite"
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(migrated_path))
+    monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
 
     app = create_app()
-    # File where a directory is required → connection/open fails.
-    blocker = tmp_path / "not-a-directory"
-    blocker.write_text("x", encoding="utf-8")
-    app.dependency_overrides[get_generation_store] = lambda: GenerationStore(blocker / "routes.sqlite")
+    app.dependency_overrides[get_generation_store] = lambda: GenerationStore(
+        "postgresql://invalid:invalid@127.0.0.1:1/does_not_exist"
+    )
 
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/health/ready")

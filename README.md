@@ -1,6 +1,6 @@
 # Sombreado Service
 
-Python backend for onboard sun-side advisories. Passenger reads use the service-owned SQLite Generation Store.
+Python backend for onboard sun-side advisories. Passenger reads use the service-owned Neon/PostGIS Generation Store.
 
 ## Local Setup
 
@@ -37,18 +37,18 @@ Installable code lives under `src/sombreado/` with two process entry points:
 | Entry | How to run | Role |
 | --- | --- | --- |
 | API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (discovery, directions, geometry, advice from Generation Store `current`) |
-| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Live Consórcio scrape; `publish-fixture` demos the store; `backup` / `restore` manage Generation Store Backup |
+| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Live Consórcio scrape; `publish-fixture` demos the store |
 
-SQLite Generation Store schema is versioned with Alembic under `migrations/`. Migrations apply automatically on deploy/startup:
+PostGIS Generation Store schema is versioned with Alembic under `migrations/`. Migrations apply automatically on deploy/startup:
 
 - Docker entrypoint (`scripts/docker-entrypoint.sh`) runs `GenerationStore.migrate()` before uvicorn
 - API process lifespan migrates on boot (covers `make start`)
-- Scrape / publish-fixture / post-restore CLI paths migrate before use
+- Scrape / publish-fixture / migrate CLI paths migrate before use
 
 Manual upgrade when needed:
 
 ```bash
-SQLITE_DATABASE_PATH=data/sombreado.sqlite uv run alembic upgrade head
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test uv run alembic upgrade head
 ```
 
 ### Generation Store backup and restore
@@ -84,13 +84,13 @@ CORS_ORIGINS='["https://app.example.com"]'
 
 ## Datastore
 
-Passenger API reads use the Generation Store SQLite file:
+Passenger API reads use the Neon/PostGIS Generation Store:
 
 ```bash
-SQLITE_DATABASE_PATH=data/sombreado.sqlite
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test
 ```
 
-Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. The API runtime path does not use PostGIS or a reader database role.
+Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. Nearby uses PostGIS geography (`ST_DWithin` + GIST) against the `current` pointer.
 
 ## Production (Oracle VM)
 

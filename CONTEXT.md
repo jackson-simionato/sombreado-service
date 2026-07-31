@@ -13,8 +13,8 @@ The separate OS-process entry point that fetches Consórcio Fênix data, validat
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Generation Store**:
-The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Passenger reads (discovery, directions, geometry, advice) use only the `current` pointer.
-_Avoid_: Scraper Database, app database, SpatiaLite
+The service-owned Neon Free Postgres/PostGIS datastore with generation-keyed route rows and PostGIS-only nearby (geography meters on WGS84). Passenger reads (discovery, directions, geometry, advice) use only the `current` pointer.
+_Avoid_: Scraper Database, app database, SpatiaLite, SQLite R*Tree passenger store, application geodesic nearby as the production path
 
 **Generation Store Backup**:
 An offline-independent copy of the **Generation Store** produced by SQLite’s online backup API, integrity-checked, then stored in Object Storage (retain last 7 successful uploads). Backup failure alerts operators but must not gate scrape publish or stop the API.
@@ -49,7 +49,7 @@ A secret used by GitHub Actions to authenticate VM deployment (SSH host/user/key
 _Avoid_: Runtime secret, application setting
 
 **Runtime Secret**:
-A secret consumed by the running Sombreado Service on the VM (for example Object Storage credentials in `/etc/sombreado/env`). The passenger API datastore path is `SQLITE_DATABASE_PATH` under `/var/lib/sombreado/`, not a PostGIS `DATABASE_URL`.
+A secret consumed by the running Sombreado Service (for example Neon connection settings). The passenger API datastore setting is a Postgres `DATABASE_URL` (or equivalent Neon URL), not `SQLITE_DATABASE_PATH`.
 _Avoid_: Pipeline secret, CI variable
 
 **Current Route Data**:
@@ -205,7 +205,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - The **Generation Store** is the passenger read path for discovery, directions, geometry, and advice.
 - **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
 - "deploy" means GitHub Actions syncing a release to the **Oracle VM Deployment** after CI passes on `main` (rsync → symlink flip → restart API), not deleting `/var/lib/sombreado/` and not Render auto-deploy.
-- `SQLITE_DATABASE_PATH` is the passenger API datastore setting; legacy `DATABASE_URL` is not part of the passenger runtime path.
+- `DATABASE_URL` is the passenger API and scrape CLI Generation Store setting; `SQLITE_DATABASE_PATH` is not the production store path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.
 - "pagination" means **Route Candidate Limit** only, not offset or cursor pagination.

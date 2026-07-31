@@ -1,7 +1,5 @@
 """Nearby reads against published current generation."""
 
-from pathlib import Path
-
 from pytest import approx
 
 from sombreado.store.generation import GenerationStore
@@ -9,14 +7,12 @@ from sombreado.store.nearby import find_nearby_routes
 from sombreado.store.sample_data import sample_generation_rows
 
 
-def test_nearby_reads_only_current_and_includes_on_route_point(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_nearby_reads_only_current_and_includes_on_route_point(store: GenerationStore):
     store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
     store.validate("gen-a")
     store.publish("gen-a")
 
-    # Point on the first sample segment (PostGIS case distance ≈ 0).
+    # Point on the first sample segment (PostGIS geography distance ≈ 0).
     with store.connection() as connection:
         results = find_nearby_routes(
             connection,
@@ -30,9 +26,7 @@ def test_nearby_reads_only_current_and_includes_on_route_point(tmp_path: Path):
     assert results[0].distance_meters == approx(0.0, abs=0.01)
 
 
-def test_nearby_excludes_routes_outside_radius(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_nearby_excludes_routes_outside_radius(store: GenerationStore):
     store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
     store.validate("gen-a")
     store.publish("gen-a")
@@ -48,9 +42,7 @@ def test_nearby_excludes_routes_outside_radius(tmp_path: Path):
     assert results == ()
 
 
-def test_nearby_ignores_staging_generation(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_nearby_ignores_staging_generation(store: GenerationStore):
     store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
     store.validate("gen-a")
     store.publish("gen-a")
@@ -67,12 +59,9 @@ def test_nearby_ignores_staging_generation(tmp_path: Path):
     assert [row.route_code for row in results] == ["1A"]
 
 
-def test_nearby_skips_candidates_with_missing_distance(tmp_path: Path, monkeypatch):
+def test_nearby_skips_candidates_with_missing_distance(store: GenerationStore, monkeypatch):
     from sombreado.store import nearby as nearby_module
     from sombreado.store.discovery import RouteCandidateRow
-
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
 
     monkeypatch.setattr(
         nearby_module,

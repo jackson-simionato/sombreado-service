@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 
@@ -45,8 +44,8 @@ def _seed_current(store: GenerationStore, suffix: str = "a") -> CanonicalRows:
     return rows
 
 
-def test_active_lease_fails_fast_without_force(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_active_lease_fails_fast_without_force(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
     store.claim_scrape_lease("other-worker", ttl_seconds=600)
@@ -69,8 +68,8 @@ def test_active_lease_fails_fast_without_force(tmp_path: Path):
     assert source.calls == 0
 
 
-def test_hard_failure_discards_staging_and_keeps_current(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_hard_failure_discards_staging_and_keeps_current(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
 
@@ -91,15 +90,15 @@ def test_hard_failure_discards_staging_and_keeps_current(tmp_path: Path):
     assert store.previous_generation() is None
     assert not store.has_generation("gen-b")
     # no leftover staging from the failed attempt
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         staging = connection.execute(
             "SELECT COUNT(*) FROM dataset_generations WHERE status IN ('staging', 'validated')"
         ).fetchone()[0]
     assert staging == 0
 
 
-def test_successful_scrape_publishes_new_current(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_successful_scrape_publishes_new_current(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
 
@@ -121,8 +120,8 @@ def test_successful_scrape_publishes_new_current(tmp_path: Path):
     assert store.scrape_lease_holder() is None
 
 
-def test_force_reclaims_active_lease_and_discards_incomplete_staging(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_force_reclaims_active_lease_and_discards_incomplete_staging(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
     store.stage("orphan", sample_generation_rows(generation_suffix="orphan"))
@@ -146,8 +145,8 @@ def test_force_reclaims_active_lease_and_discards_incomplete_staging(tmp_path: P
     assert store.scrape_lease_holder() is None
 
 
-def test_one_automatic_retry_after_collect_failure(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_one_automatic_retry_after_collect_failure(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
 
@@ -167,8 +166,8 @@ def test_one_automatic_retry_after_collect_failure(tmp_path: Path):
     assert store.current_generation() == outcome.generation_id
 
 
-def test_discard_staging_failure_is_surfaced_in_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_discard_staging_failure_is_surfaced_in_outcome(database_url: str, monkeypatch: pytest.MonkeyPatch):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
 
@@ -205,8 +204,8 @@ def test_discard_staging_failure_is_surfaced_in_outcome(tmp_path: Path, monkeypa
     assert store.current_generation() == "gen-a"
 
 
-def test_non_retryable_collect_errors_propagate(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_non_retryable_collect_errors_propagate(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
 
@@ -221,8 +220,8 @@ def test_non_retryable_collect_errors_propagate(tmp_path: Path):
     assert store.scrape_lease_holder() is None
 
 
-def test_scrape_run_metadata_recorded_and_pruned(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_scrape_run_metadata_recorded_and_pruned(database_url: str):
+    store = GenerationStore(database_url)
     store.migrate()
     _seed_current(store)
 
@@ -237,7 +236,7 @@ def test_scrape_run_metadata_recorded_and_pruned(tmp_path: Path):
     )
 
     # Seed an old run row that should be pruned.
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         connection.execute(
             """
             INSERT INTO scrape_runs(
@@ -245,10 +244,14 @@ def test_scrape_run_metadata_recorded_and_pruned(tmp_path: Path):
                 route_count, warning_count, error_summary
             )
             VALUES (
-                'old-run', '2000-01-01T00:00:00+00:00', '2000-01-01T00:01:00+00:00',
+                'old-run', %(started)s, %(finished)s,
                 'failed', NULL, 0, 0, 'ancient'
             )
-            """
+            """,
+            {
+                "started": datetime(2000, 1, 1, tzinfo=UTC),
+                "finished": datetime(2000, 1, 1, 0, 1, tzinfo=UTC),
+            },
         )
         connection.commit()
 
@@ -260,7 +263,7 @@ def test_scrape_run_metadata_recorded_and_pruned(tmp_path: Path):
     )
 
     assert outcome.status == "published"
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         rows = connection.execute(
             "SELECT id, outcome, route_count, warning_count FROM scrape_runs ORDER BY started_at"
         ).fetchall()
