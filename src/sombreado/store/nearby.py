@@ -34,7 +34,8 @@ def find_nearby_routes(
         NearbyRoute(
             route_code=candidate.route_code,
             route_name=candidate.route_name,
-            distance_meters=float(candidate.distance_meters or 0.0),
+            distance_meters=float(candidate.distance_meters),
         )
         for candidate in candidates
+        if candidate.distance_meters is not None
     )

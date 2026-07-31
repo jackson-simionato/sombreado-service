@@ -553,6 +553,50 @@ def test_deploy_rejects_symlink_release_directory(tmp_path: Path):
     assert "must not be a symlink" in result.stderr
 
 
+def test_deploy_rejects_release_path_escaping_releases_root(tmp_path: Path):
+    root = tmp_path / "opt" / "sombreado"
+    data_root = tmp_path / "var" / "lib" / "sombreado"
+    unit_dir = tmp_path / "etc" / "systemd" / "system"
+    env_file = tmp_path / "etc" / "sombreado" / "env"
+    deploy_lib = tmp_path / "usr" / "local" / "lib" / "sombreado"
+    bin_dir = tmp_path / "bin"
+
+    (root / "releases").mkdir(parents=True)
+    escaped = root / "escaped-release"
+    _seed_release_tree(escaped)
+    _seed_root_owned_units(deploy_lib)
+    data_root.mkdir(parents=True)
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("SQLITE_DATABASE_PATH=/var/lib/sombreado/routes.sqlite\n", encoding="utf-8")
+
+    _write_executable(bin_dir / "systemctl", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        bin_dir / "uv",
+        "#!/bin/sh\nmkdir -p .venv/bin\ntouch .venv/bin/uvicorn .venv/bin/sombreado-scrape\n",
+    )
+    _write_executable(bin_dir / "curl", "#!/bin/sh\nexit 0\n")
+
+    env = _base_deploy_env(
+        bin_dir=bin_dir,
+        root=root,
+        data_root=data_root,
+        unit_dir=unit_dir,
+        env_file=env_file,
+        deploy_lib=deploy_lib,
+        release_sha="../escaped-release",
+    )
+
+    result = subprocess.run(
+        [str(DEPLOY_SCRIPT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "escapes releases root" in result.stderr
+
+
 def test_deploy_default_health_url_is_readiness():
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "HEALTH_URL:-http://127.0.0.1:8000/health/ready" in text

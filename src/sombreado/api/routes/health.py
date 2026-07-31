@@ -20,7 +20,9 @@ async def health_ready(
     """Prove the Generation Store is openable after migrate (current may be null)."""
     try:
         with store.connection() as connection:
-            connection.execute("SELECT 1 FROM alembic_version LIMIT 1").fetchone()
+            row = connection.execute("SELECT version_num FROM alembic_version LIMIT 1").fetchone()
+        if row is None:
+            raise RuntimeError("alembic_version has no applied revision")
         current = store.current_generation()
     except Exception as exc:
         raise HTTPException(status_code=503, detail="generation store not ready") from exc
