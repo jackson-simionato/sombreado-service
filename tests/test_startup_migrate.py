@@ -1,6 +1,5 @@
 """Deploy/startup applies Generation Store migrations automatically."""
 
-import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -35,8 +34,9 @@ def test_api_startup_applies_migrations(configured_database: str):
     assert version == ("20260731_0001",)
 
 
-def test_api_startup_logs_redacted_database_url(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+def test_api_startup_logs_redacted_database_url(monkeypatch: pytest.MonkeyPatch):
     secret_url = "postgresql://neon_user:super-secret-password@ep-example.neon.tech/neondb"
+    logged: list[str] = []
 
     class FakeStore:
         def __init__(self, database_url: str) -> None:
@@ -48,22 +48,28 @@ def test_api_startup_logs_redacted_database_url(monkeypatch: pytest.MonkeyPatch,
         def current_generation(self) -> None:
             return None
 
+    class FakeLogger:
+        def info(self, message: str, *args: object) -> None:
+            logged.append(message % args if args else message)
+
     monkeypatch.setattr(
         "sombreado.api.main.get_api_settings",
         lambda: Settings(_env_file=None, database_url=secret_url, cors_origins=["http://localhost:3000"]),
     )
     monkeypatch.setattr("sombreado.api.main.GenerationStore", FakeStore)
+    monkeypatch.setattr("sombreado.api.main.get_logger", lambda _name: FakeLogger())
     get_settings.cache_clear()
 
     app = create_app()
-    with caplog.at_level(logging.INFO, logger="sombreado.api.main"):
-        with TestClient(app) as client:
-            assert client.get("/health/live").status_code == 200
+    with TestClient(app) as client:
+        assert client.get("/health/live").status_code == 200
 
-    assert "super-secret-password" not in caplog.text
-    assert "neon_user" not in caplog.text
-    assert "ep-example.neon.tech" in caplog.text
-    assert "/neondb" in caplog.text
+    assert logged, "expected lifespan to log Generation Store migrate"
+    text = "\n".join(logged)
+    assert "super-secret-password" not in text
+    assert "neon_user" not in text
+    assert "ep-example.neon.tech" in text
+    assert "/neondb" in text
 
 
 def test_redacted_database_url_strips_userinfo():
