@@ -141,7 +141,11 @@ class PostGISGenerationStore:
         now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl_seconds)
         with self.connection() as connection:
-            row = connection.execute("SELECT holder_id, expires_at FROM scrape_lease WHERE singleton = 1").fetchone()
+            # Serialize claimants even when the singleton row does not exist yet.
+            connection.execute("SELECT pg_advisory_xact_lock(%(key)s)", {"key": 57057})
+            row = connection.execute(
+                "SELECT holder_id, expires_at FROM scrape_lease WHERE singleton = 1 FOR UPDATE"
+            ).fetchone()
             if row is not None:
                 current_holder = str(row["holder_id"])
                 expired = row["expires_at"] <= now

@@ -269,7 +269,8 @@ class ScenarioLab:
             ),
             "database": self.store.database,
             "spatial_model": self.store.spatial_model,
-            "store_snapshot": self.store.snapshot(),
+            # Per-gate facts are authoritative: each scenario recreates the disposable DB.
+            "postgis_version": self.store.snapshot().get("postgis_version"),
             "results": {
                 name: {
                     "passed": result.passed,

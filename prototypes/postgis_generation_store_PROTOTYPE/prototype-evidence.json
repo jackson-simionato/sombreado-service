@@ -1,7 +1,8 @@
 {
   "database": "sombreado_postgis_generation_prototype",
+  "postgis_version": "3.4 USE_GEOS=1 USE_PROJ=1 USE_STATS=1",
   "question": "Can a cheap Postgres/PostGIS spike demonstrate reusable Generation Store semantics plus PostGIS-only nearby enough to lock Neon store design?",
-  "recorded_at": "2026-07-31T14:19:31.859031+00:00",
+  "recorded_at": "2026-07-31T14:21:44.209499+00:00",
   "results": {
     "lease": {
       "facts": {
@@ -47,23 +48,5 @@
     }
   },
   "spatial_model": "geography(LINESTRING,4326) + ST_DWithin + GIST",
-  "store_snapshot": {
-    "current": "gen-b",
-    "database": "sombreado_postgis_generation_prototype",
-    "generations": [
-      [
-        "gen-a",
-        "published"
-      ],
-      [
-        "gen-b",
-        "published"
-      ]
-    ],
-    "lease_holder": null,
-    "postgis_version": "3.4 USE_GEOS=1 USE_PROJ=1 USE_STATS=1",
-    "previous": "gen-a",
-    "spatial_model": "geography(LINESTRING,4326) + ST_DWithin + GIST"
-  },
   "verdict": "postgis-generation-store-credible"
 }

@@ -6,15 +6,15 @@ help: ## Show available commands
 	@printf '%s\n' \
 		'Usage: make <target>' \
 		'' \
-		'  help                                 Show available commands' \
-		'  install                              Install project dependencies' \
-		'  start                                Start the local development server' \
-		'  test                                 Run the test suite' \
-		'  format                               Format Python files with Ruff' \
-		'  lint                                 Run Ruff lint checks' \
-		'  check                                Run all non-mutating completion checks' \
-		'  pre-commit                           Install the pre-commit hooks' \
-		'  prototype-postgis-generation-store   Run the throwaway PostGIS Generation Store lab'
+		'  help                               Show available commands' \
+		'  install                            Install project dependencies' \
+		'  start                              Start the local development server' \
+		'  test                               Run the test suite' \
+		'  format                             Format Python files with Ruff' \
+		'  lint                               Run Ruff lint checks' \
+		'  check                              Run all non-mutating completion checks' \
+		'  pre-commit                         Install the pre-commit hooks' \
+		'  prototype-postgis-generation-store Run the throwaway PostGIS Generation Store lab'
 
 install: ## Install project dependencies
 	uv sync
