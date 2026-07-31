@@ -151,6 +151,25 @@ async def test_health_live():
     assert response.json() == {"status": "ok"}
 
 
+def test_health_ready_reports_store_usable(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    database_path = tmp_path / "ready.sqlite"
+    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(database_path))
+    from sombreado.config import get_settings
+
+    get_settings.cache_clear()
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "currentGeneration" in body
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["http://localhost:3000", "http://127.0.0.1:3000"])
 async def test_local_frontend_origins_are_allowed_by_cors(origin):
@@ -649,6 +668,7 @@ async def test_openapi_exposes_browser_geometry_endpoint_without_legacy_segments
     paths = response.json()["paths"]
     assert set(paths) == {
         "/health/live",
+        "/health/ready",
         "/v1/route-candidates/nearby",
         "/v1/route-candidates/search",
         "/v1/routes/{route_id}/directions",

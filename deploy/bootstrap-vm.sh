@@ -70,7 +70,9 @@ chmod 0750 "${SOMBREADO_DATA_ROOT}" "${SOMBREADO_ENV_DIR}"
 
 # Releases are group-writable so the Actions SSH user can rsync without being root.
 chown sombreado:sombreado "${SOMBREADO_ROOT}/releases" 2>/dev/null || true
-chmod 2775 "${SOMBREADO_ROOT}/releases"
+# setgid + sticky + group-write: deploy group can create releases, but cannot
+# unlink/replace top-level entries owned by others (including live current target).
+chmod 3775 "${SOMBREADO_ROOT}/releases"
 
 if [[ -n "${DEPLOY_USER}" ]]; then
   if ! id -u "${DEPLOY_USER}" >/dev/null 2>&1; then
