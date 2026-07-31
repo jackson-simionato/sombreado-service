@@ -74,7 +74,7 @@ def order_nearby_items(
     items: Sequence[_T],
     *,
     distance_of: Callable[[_T], float],
-    sort_key: Callable[[_T], tuple],
+    sort_key: Callable[[_T], tuple[object, ...]],
 ) -> tuple[_T, ...]:
     """Order items by distance, applying sort_key ties inside 2 m bands."""
     if not items:
