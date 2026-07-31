@@ -9,7 +9,7 @@ The installable backend package with two process entry points: the passenger-fac
 _Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
 
 **Scrape CLI**:
-The separate OS-process entry point that fetches Consórcio Fênix data, validates a staged **Dataset Generation**, and publishes into the **Generation Store** under the production operating policy (lease, absence-vs-hard-failure, one retry). It can also publish fixture generations for demos, and run **Generation Store Backup** / aside-and-restore jobs independent of publish.
+The separate OS-process entry point that fetches Consórcio Fênix data, validates a staged **Dataset Generation**, and publishes into the **Generation Store** under the production operating policy (lease, absence-vs-hard-failure, one retry). It can also publish fixture generations for demos.
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Generation Store**:
@@ -17,8 +17,8 @@ The service-owned Neon Free Postgres/PostGIS datastore with generation-keyed rou
 _Avoid_: Scraper Database, app database, SpatiaLite, SQLite R*Tree passenger store, application geodesic nearby as the production path
 
 **Generation Store Backup**:
-An offline-independent copy of the **Generation Store** produced by SQLite’s online backup API, integrity-checked, then stored in Object Storage (retain last 7 successful uploads). Backup failure alerts operators but must not gate scrape publish or stop the API.
-_Avoid_: Cold copy of db+WAL, SQL dump, on-VM-only copies as recovery source of truth
+Retired v1 production seam. Historically an offline-independent copy of the **Generation Store** (SQLite online backup or planned `pg_dump`→object storage). Not required for Neon Free: short PITR, then fresh scrape. CLI `backup` / `restore` commands are parked and must exit without mutating the store.
+_Avoid_: Required multi-day dump path, Object Storage retain-7 as a v1 obligation
 
 **Dataset Generation**:
 One complete scrape/fixture snapshot in the **Generation Store**, addressed by generation id. Roles are staging (in-flight), current (passenger-visible pointer), and previous (immediate prior current).
@@ -37,19 +37,19 @@ Retired passenger-read seam. Historically the SELECT-only database user used by 
 _Avoid_: Migration user, scraper user, owner role
 
 **Oracle VM Deployment**:
-The production runtime for the Sombreado Service on one Oracle Always Free VM: systemd `sombreado-api` plus scrape and backup timers, durable **Generation Store** under `/var/lib/sombreado/`, releases under `/opt/sombreado/`, deployed by GitHub Actions after CI passes on `main`.
-_Avoid_: Render as production API host, registry-based deploy, deleting the data directory on release
-
-**Render Deployment**:
-Retired production hosting seam. Historically the no-cost Render Free web service triggered by GitHub Actions; kept only as a possible read-only rollback host until cutover retirement.
+Retired production hosting seam. Historically one Oracle Always Free VM with systemd API/scrape/backup units and an on-host SQLite **Generation Store** under `/var/lib/sombreado/`; no longer the production target for the Neon centralization path.
 _Avoid_: Current production deploy target
 
+**Render Deployment**:
+The production runtime for the passenger API on one Render Free web service. GitHub Actions triggers deploy via Render Deploy Hook after CI passes on `main`; scrape runs as an Actions job against Neon, not on the Render instance.
+_Avoid_: Oracle VM as production API host, co-located scrape on the web service, registry-based deploy for v1
+
 **Pipeline Secret**:
-A secret used by GitHub Actions to authenticate VM deployment (SSH host/user/key). Actions does not hold Object Storage or other runtime secrets.
-_Avoid_: Runtime secret, application setting
+A secret used by GitHub Actions for deploy-hook or scrape/Neon authentication.
+_Avoid_: Runtime secret, application setting, R2 backup credentials as a v1 requirement
 
 **Runtime Secret**:
-A secret consumed by the running Sombreado Service (for example Neon connection settings). The passenger API datastore setting is a Postgres `DATABASE_URL` (or equivalent Neon URL), not `SQLITE_DATABASE_PATH`.
+A secret consumed by the running Sombreado Service on Render (for example Neon connection settings). The passenger API datastore setting is a Postgres `DATABASE_URL` (or equivalent Neon URL), not `SQLITE_DATABASE_PATH`.
 _Avoid_: Pipeline secret, CI variable
 
 **Current Route Data**:
@@ -129,8 +129,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
 - Passenger **Route Discovery**, **Direction Choices**, **Route Geometry**, and **Advice** read only the **Generation Store** `current` pointer.
 - The **Scrape CLI** owns live Consórcio fetch, migrate, and publish against the **Generation Store**.
-- A **Generation Store Backup** job is independent of scrape publish; failure alerts without blocking publish or API availability.
-- Aside-and-restore installs the newest integrity-checked **Generation Store Backup** object after moving a bad live file aside; a fresh scrape is used only when no usable backup exists.
+- **Generation Store Backup** is not a v1 Neon obligation; recovery beyond short PITR is a fresh scrape.
 - A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
 - Incomplete staging never auto-publishes; failure retains the last successful current (+ previous when present).
 - The API runtime path does not use the retired **Reader Database Role** or **Scraper Database**.
@@ -164,9 +163,9 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - Preview **Advice Position** uses the selected direction start.
 - A **Sun Condition** describes the selected **Advice Horizon**, not individual route segments.
 - A **Seat-area Recommendation** is produced by **Advice** and is not derived by the browser client.
-- An **Oracle VM Deployment** runs the **Sombreado Service** (API systemd unit + scrape/backup timers) and is updated by GitHub Actions after CI passes on `main`.
-- A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it (VM SSH credentials only).
-- A **Runtime Secret** belongs on the VM (`/etc/sombreado/env`) when the API or CLI process needs it.
+- A **Render Deployment** runs the passenger API; scrape publishes against Neon from GitHub Actions.
+- A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it (deploy hook / Neon writer credentials).
+- A **Runtime Secret** belongs on Render when the API process needs it (`DATABASE_URL` to Neon).
 
 ## Example dialogue
 
@@ -204,7 +203,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 - The **Generation Store** is the passenger read path for discovery, directions, geometry, and advice.
 - **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
-- "deploy" means GitHub Actions syncing a release to the **Oracle VM Deployment** after CI passes on `main` (rsync → symlink flip → restart API), not deleting `/var/lib/sombreado/` and not Render auto-deploy.
+- "deploy" means CI on `main` then Render Deploy Hook for the API; scrape is Actions-only against Neon — not Oracle VM rsync or co-located scrape on the web service.
 - `DATABASE_URL` is the passenger API and scrape CLI Generation Store setting; `SQLITE_DATABASE_PATH` is not the production store path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.

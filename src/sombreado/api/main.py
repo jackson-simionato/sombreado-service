@@ -13,7 +13,7 @@ from sombreado.api.routes import advisory, health, nearby, route_candidates
 from sombreado.config import get_api_settings, get_settings
 from sombreado.domain.errors import ServiceError
 from sombreado.logging import configure_logging, get_logger
-from sombreado.store import GenerationStore
+from sombreado.store import GenerationStore, redacted_database_url
 
 
 @asynccontextmanager
@@ -23,7 +23,7 @@ async def lifespan(_app: FastAPI):
     store.migrate()
     get_logger(__name__).info(
         "Applied Generation Store migrations database=%s current=%s",
-        settings.database_url,
+        redacted_database_url(settings.database_url),
         store.current_generation(),
     )
     yield

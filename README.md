@@ -53,20 +53,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test uv run
 
 ### Generation Store backup and restore
 
-Daily offline-independent backups use SQLite’s online backup API, `PRAGMA integrity_check` on the backup file, then upload to Object Storage (retain last 7 successful uploads). The backup job also runs `PRAGMA quick_check` on the live DB and logs an `ALERT` on failure. Backup failure does **not** gate scrape publish or stop the API.
-
-```bash
-# Local drill (directory stand-in for Object Storage)
-OBJECT_STORAGE_BACKEND=directory \
-OBJECT_STORAGE_DIRECTORY=data/object-storage \
-sombreado-scrape backup
-
-# Aside-and-restore from the newest integrity-checked object
-# Stop API + scrape timer first in production.
-sombreado-scrape restore
-```
-
-Production uses Oracle Object Storage via the S3 Compatibility API (`OBJECT_STORAGE_BACKEND=s3` plus endpoint/bucket/keys). If no usable backup exists, start empty and run a fresh scrape for the first validated current generation.
+`sombreado-scrape backup` and `sombreado-scrape restore` are **parked** for the Neon Generation Store: both commands exit non-zero and must not be used as the production recovery path. Recovery beyond Neon’s short PITR window is a fresh scrape into an empty/migrated store.
 
 Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion`, plus shared `config`, `logging`, and `domain`.
 

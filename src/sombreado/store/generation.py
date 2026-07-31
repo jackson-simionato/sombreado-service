@@ -27,7 +27,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ALEMBIC_INI = _REPO_ROOT / "alembic.ini"
 _LEASE_LOCK_KEY = 57057
 
-__all__ = ["CanonicalRows", "GenerationStore", "ScrapeLeaseHeldError", "sqlalchemy_database_url"]
+__all__ = [
+    "CanonicalRows",
+    "GenerationStore",
+    "ScrapeLeaseHeldError",
+    "redacted_database_url",
+    "sqlalchemy_database_url",
+]
 
 
 class ScrapeLeaseHeldError(RuntimeError):
@@ -40,6 +46,17 @@ def sqlalchemy_database_url(database_url: str) -> str:
     if parsed.scheme in {"postgresql", "postgres"}:
         return urlunparse(parsed._replace(scheme="postgresql+psycopg"))
     return database_url
+
+
+def redacted_database_url(database_url: str) -> str:
+    """Return scheme://host[:port]/path without userinfo for safe logging."""
+    parsed = urlparse(database_url.strip())
+    if not parsed.scheme:
+        return "<redacted>"
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunparse((parsed.scheme, host, parsed.path or "", "", "", ""))
 
 
 class GenerationStore:

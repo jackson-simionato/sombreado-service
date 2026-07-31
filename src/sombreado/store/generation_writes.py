@@ -473,7 +473,15 @@ def geography_wkt(geometry: str) -> str:
     """Normalize EWKT/WKT into an SRID=4326 EWKT suitable for ST_GeogFromText."""
     text = geometry.strip()
     if text.upper().startswith("SRID="):
-        return text
+        srid_part, separator, body = text.partition(";")
+        if not separator or not body.strip():
+            raise ValueError(f"route segment has invalid EWKT: {geometry}")
+        if srid_part.upper() != "SRID=4326":
+            raise ValueError(f"route segment SRID must be 4326: {geometry}")
+        wkt = body.strip()
+        if not wkt.upper().startswith("LINESTRING"):
+            raise ValueError(f"route segment is not a LINESTRING: {geometry}")
+        return f"SRID=4326;{wkt}"
     if not text.upper().startswith("LINESTRING"):
         raise ValueError(f"route segment is not a LINESTRING: {geometry}")
     return f"SRID=4326;{text}"

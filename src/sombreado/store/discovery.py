@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import psycopg
+from psycopg.rows import dict_row
 
 _SEARCH_SQL = """
     SELECT
-        routes.id,
-        dataset_route_versions.route_version_id,
-        routes.code,
-        routes.name
+        routes.id AS route_id,
+        dataset_route_versions.route_version_id AS route_version_id,
+        routes.code AS route_code,
+        routes.name AS route_name
     FROM routes
     JOIN dataset_route_versions
         ON dataset_route_versions.route_id = routes.id
@@ -26,10 +27,10 @@ _SEARCH_SQL = """
 
 _NEARBY_CANDIDATE_SQL = """
     SELECT
-        routes.id,
-        dataset_route_versions.route_version_id,
-        routes.code,
-        routes.name,
+        routes.id AS route_id,
+        dataset_route_versions.route_version_id AS route_version_id,
+        routes.code AS route_code,
+        routes.name AS route_name,
         MIN(
             ST_Distance(
                 route_segments.geom,
@@ -189,16 +190,17 @@ def search_route_candidates(
 ) -> tuple[RouteCandidateRow, ...]:
     """Return current-generation Route Candidates matching code or name."""
     pattern = f"%{query}%"
-    rows = connection.execute(_SEARCH_SQL, {"pattern": pattern, "limit": limit}).fetchall()
-    version_ids = [str(row[1]) for row in rows]
+    with connection.cursor(row_factory=dict_row) as cursor:
+        rows = cursor.execute(_SEARCH_SQL, {"pattern": pattern, "limit": limit}).fetchall()
+    version_ids = [str(row["route_version_id"]) for row in rows]
     hints_by_version = _direction_hints_by_version(connection, version_ids)
     return tuple(
         RouteCandidateRow(
-            route_id=str(row[0]),
-            route_version_id=str(row[1]),
-            route_code=str(row[2]),
-            route_name=str(row[3]),
-            direction_hints=hints_by_version.get(str(row[1]), ()),
+            route_id=str(row["route_id"]),
+            route_version_id=str(row["route_version_id"]),
+            route_code=str(row["route_code"]),
+            route_name=str(row["route_name"]),
+            direction_hints=hints_by_version.get(str(row["route_version_id"]), ()),
         )
         for row in rows
     )
@@ -213,20 +215,21 @@ def find_nearby_route_candidates(
     limit: int,
 ) -> tuple[RouteCandidateRow, ...]:
     """Return current-generation nearby Route Candidates with PostGIS geography distance."""
-    rows = connection.execute(
-        _NEARBY_CANDIDATE_SQL,
-        {"lat": lat, "lng": lng, "radius": radius_meters, "limit": limit},
-    ).fetchall()
-    version_ids = [str(row[1]) for row in rows]
+    with connection.cursor(row_factory=dict_row) as cursor:
+        rows = cursor.execute(
+            _NEARBY_CANDIDATE_SQL,
+            {"lat": lat, "lng": lng, "radius": radius_meters, "limit": limit},
+        ).fetchall()
+    version_ids = [str(row["route_version_id"]) for row in rows]
     hints_by_version = _direction_hints_by_version(connection, version_ids)
     return tuple(
         RouteCandidateRow(
-            route_id=str(row[0]),
-            route_version_id=str(row[1]),
-            route_code=str(row[2]),
-            route_name=str(row[3]),
-            direction_hints=hints_by_version.get(str(row[1]), ()),
-            distance_meters=float(row[4]),
+            route_id=str(row["route_id"]),
+            route_version_id=str(row["route_version_id"]),
+            route_code=str(row["route_code"]),
+            route_name=str(row["route_name"]),
+            direction_hints=hints_by_version.get(str(row["route_version_id"]), ()),
+            distance_meters=float(row["distance_meters"]),
         )
         for row in rows
     )
