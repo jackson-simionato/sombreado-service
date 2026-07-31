@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from sombreado.store.geodesic import (
     approximate_point_to_segment_meters,
-    order_nearby_rows,
+    order_nearby_items,
     point_to_segment_meters,
     search_bounds,
 )
@@ -216,16 +216,14 @@ def find_nearby_route_candidates(
         if distance <= radius_meters:
             refined.append((route_id, version_id, code, name, distance))
 
-    ordered_codes = order_nearby_rows(
-        [(code, name, distance) for _route_id, _version_id, code, name, distance in refined]
-    )
-    by_code = {code: (route_id, version_id, name, distance) for route_id, version_id, code, name, distance in refined}
-    ordered = []
-    for code, _name, distance in ordered_codes:
-        route_id, version_id, name, _distance = by_code[code]
-        ordered.append((route_id, version_id, code, name, distance))
-        if len(ordered) >= limit:
-            break
+    # Preserve route_id through ordering so equal codes cannot collapse hits.
+    ordered = list(
+        order_nearby_items(
+            refined,
+            distance_of=lambda row: row[4],
+            sort_key=lambda row: (row[2], row[3], row[0]),
+        )
+    )[:limit]
 
     version_ids = [version_id for _route_id, version_id, _code, _name, _distance in ordered]
     hints_by_version = _direction_hints_by_version(connection, version_ids)

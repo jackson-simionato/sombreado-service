@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from math import cos, pi, radians, sin, sqrt
+from typing import TypeVar
 
 from geographiclib.geodesic import Geodesic
 
@@ -11,7 +13,9 @@ _WGS84_A = 6_378_137.0
 _WGS84_F = 1.0 / 298.257223563
 _WGS84_E2 = _WGS84_F * (2.0 - _WGS84_F)
 _GEODESIC = Geodesic.WGS84
-_NEARBY_DISTANCE_TIE_METERS = 2.0
+NEARBY_DISTANCE_TIE_METERS = 2.0
+
+_T = TypeVar("_T")
 
 
 def point_to_segment_meters(
@@ -66,19 +70,33 @@ def search_bounds(
     return lng - lng_delta, lng + lng_delta, lat - lat_delta, lat + lat_delta
 
 
+def order_nearby_items(
+    items: Sequence[_T],
+    *,
+    distance_of: Callable[[_T], float],
+    sort_key: Callable[[_T], tuple],
+) -> tuple[_T, ...]:
+    """Order items by distance, applying sort_key ties inside 2 m bands."""
+    if not items:
+        return ()
+    ordered = sorted(items, key=lambda item: (distance_of(item), *sort_key(item)))
+    groups: list[list[_T]] = [[ordered[0]]]
+    for item in ordered[1:]:
+        if distance_of(item) - distance_of(groups[-1][-1]) > NEARBY_DISTANCE_TIE_METERS:
+            groups.append([])
+        groups[-1].append(item)
+    return tuple(item for group in groups for item in sorted(group, key=sort_key))
+
+
 def order_nearby_rows(
     rows: list[tuple[str, str, float]],
 ) -> tuple[tuple[str, str, float], ...]:
     """Order nearby rows by distance, applying code/name ties inside 2 m bands."""
-    if not rows:
-        return ()
-    ordered = sorted(rows, key=lambda value: (value[2], value[0], value[1]))
-    groups: list[list[tuple[str, str, float]]] = [[ordered[0]]]
-    for row in ordered[1:]:
-        if row[2] - groups[-1][-1][2] > _NEARBY_DISTANCE_TIE_METERS:
-            groups.append([])
-        groups[-1].append(row)
-    return tuple(row for group in groups for row in sorted(group, key=lambda value: (value[0], value[1])))
+    return order_nearby_items(
+        rows,
+        distance_of=lambda row: row[2],
+        sort_key=lambda row: (row[0], row[1]),
+    )
 
 
 def _local_segment_foot(
