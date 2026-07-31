@@ -6,8 +6,8 @@
 # DEPLOY_USER (optional): SSH login used by GitHub Actions. Grants write to
 # /opt/sombreado/releases and passwordless sudo for the fixed-path activator only.
 #
-# Re-run after changing deploy/deploy-release.sh or deploy/sombreado-deploy-release
-# so root-owned copies under /usr/local are refreshed.
+# Re-run after changing deploy/deploy-release.sh, deploy/sombreado-deploy-release,
+# or deploy/systemd/* so root-owned copies under /usr/local are refreshed.
 
 set -euo pipefail
 
@@ -44,11 +44,24 @@ mkdir -p \
   "${SOMBREADO_SBIN}" \
   "${SOMBREADO_DEPLOY_LIB}"
 
-# Install root-owned activator + deploy implementation (never sudo user-writable release paths).
+# Install root-owned activator, deploy implementation, and systemd unit templates.
+# Never install privileged units from the deployer-writable release tree.
 install -m 0755 "${SCRIPT_DIR}/${ACTIVATOR_NAME}" "${ACTIVATOR_PATH}"
 install -m 0755 "${SCRIPT_DIR}/deploy-release.sh" "${SOMBREADO_DEPLOY_LIB}/deploy-release.sh"
+mkdir -p "${SOMBREADO_DEPLOY_LIB}/systemd"
+install -m 0644 \
+  "${SCRIPT_DIR}/systemd/sombreado-api.service" \
+  "${SCRIPT_DIR}/systemd/sombreado-scrape.service" \
+  "${SCRIPT_DIR}/systemd/sombreado-scrape.timer" \
+  "${SCRIPT_DIR}/systemd/sombreado-backup.service" \
+  "${SCRIPT_DIR}/systemd/sombreado-backup.timer" \
+  "${SOMBREADO_DEPLOY_LIB}/systemd/"
 if [[ "$(id -u)" -eq 0 ]]; then
-  chown root:root "${ACTIVATOR_PATH}" "${SOMBREADO_DEPLOY_LIB}/deploy-release.sh"
+  chown root:root \
+    "${ACTIVATOR_PATH}" \
+    "${SOMBREADO_DEPLOY_LIB}/deploy-release.sh" \
+    "${SOMBREADO_DEPLOY_LIB}/systemd" \
+    "${SOMBREADO_DEPLOY_LIB}/systemd/"*
 fi
 
 chown sombreado:sombreado "${SOMBREADO_ROOT}" "${SOMBREADO_DATA_ROOT}" 2>/dev/null || true

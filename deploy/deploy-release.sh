@@ -6,12 +6,14 @@
 #   /opt/sombreado/current -> releases/<sha>
 #   /var/lib/sombreado/              # durable SQLite + backup work dirs (never deleted)
 #   /etc/sombreado/env               # runtime secrets (EnvironmentFile)
+#   /usr/local/lib/sombreado/systemd # root-owned unit templates (from bootstrap)
 #
 # Production entry point (root-owned, via sudoers):
 #   sudo /usr/local/sbin/sombreado-deploy-release <sha>
 #
 # Overrides for tests / non-standard roots:
 #   SOMBREADO_ROOT SOMBREADO_DATA_ROOT SOMBREADO_UNIT_DIR SOMBREADO_ENV_FILE
+#   SOMBREADO_DEPLOY_LIB SOMBREADO_UNIT_SOURCE
 #   SYSTEMCTL UV KEEP_RELEASES HEALTH_URL HEALTH_TIMEOUT_SECONDS CURL
 
 set -euo pipefail
@@ -20,12 +22,22 @@ SOMBREADO_ROOT="${SOMBREADO_ROOT:-/opt/sombreado}"
 SOMBREADO_DATA_ROOT="${SOMBREADO_DATA_ROOT:-/var/lib/sombreado}"
 SOMBREADO_UNIT_DIR="${SOMBREADO_UNIT_DIR:-/etc/systemd/system}"
 SOMBREADO_ENV_FILE="${SOMBREADO_ENV_FILE:-/etc/sombreado/env}"
+SOMBREADO_DEPLOY_LIB="${SOMBREADO_DEPLOY_LIB:-/usr/local/lib/sombreado}"
+SOMBREADO_UNIT_SOURCE="${SOMBREADO_UNIT_SOURCE:-${SOMBREADO_DEPLOY_LIB}/systemd}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 UV="${UV:-uv}"
 CURL="${CURL:-curl}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health/live}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
+
+UNIT_NAMES=(
+  sombreado-api.service
+  sombreado-scrape.service
+  sombreado-scrape.timer
+  sombreado-backup.service
+  sombreado-backup.timer
+)
 
 if [[ -z "${RELEASE_SHA:-}" ]]; then
   echo "RELEASE_SHA is required" >&2
@@ -42,6 +54,21 @@ if [[ ! -f "${SOMBREADO_ENV_FILE}" ]]; then
   echo "runtime env missing: ${SOMBREADO_ENV_FILE} (copy deploy/env.example)" >&2
   exit 1
 fi
+
+if [[ ! -d "${SOMBREADO_UNIT_SOURCE}" ]]; then
+  echo "root-owned unit source missing: ${SOMBREADO_UNIT_SOURCE} (re-run bootstrap-vm.sh)" >&2
+  exit 1
+fi
+
+unit_paths=()
+for name in "${UNIT_NAMES[@]}"; do
+  path="${SOMBREADO_UNIT_SOURCE}/${name}"
+  if [[ ! -f "${path}" ]]; then
+    echo "missing root-owned unit: ${path}" >&2
+    exit 1
+  fi
+  unit_paths+=("${path}")
+done
 
 # Durable data directory: create if absent; never delete or recreate.
 mkdir -p \
@@ -66,15 +93,14 @@ fi
   fi
 )
 
-echo "installing systemd units from ${RELEASE_DIR}/deploy/systemd"
+echo "installing systemd units from root-owned ${SOMBREADO_UNIT_SOURCE}"
 mkdir -p "${SOMBREADO_UNIT_DIR}"
-install -m 0644 \
-  "${RELEASE_DIR}/deploy/systemd/sombreado-api.service" \
-  "${RELEASE_DIR}/deploy/systemd/sombreado-scrape.service" \
-  "${RELEASE_DIR}/deploy/systemd/sombreado-scrape.timer" \
-  "${RELEASE_DIR}/deploy/systemd/sombreado-backup.service" \
-  "${RELEASE_DIR}/deploy/systemd/sombreado-backup.timer" \
-  "${SOMBREADO_UNIT_DIR}/"
+install -m 0644 "${unit_paths[@]}" "${SOMBREADO_UNIT_DIR}/"
+
+PREVIOUS_CURRENT=""
+if [[ -L "${SOMBREADO_ROOT}/current" || -e "${SOMBREADO_ROOT}/current" ]]; then
+  PREVIOUS_CURRENT="$(readlink -f "${SOMBREADO_ROOT}/current" || true)"
+fi
 
 echo "flipping current symlink -> ${RELEASE_DIR}"
 mkdir -p "${SOMBREADO_ROOT}"
@@ -97,6 +123,17 @@ deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 until "${CURL}" -fsS --max-time 2 "${HEALTH_URL}" >/dev/null 2>&1; do
   if (( SECONDS >= deadline )); then
     echo "API health check failed after ${HEALTH_TIMEOUT_SECONDS}s: ${HEALTH_URL}" >&2
+    if [[ -n "${PREVIOUS_CURRENT}" && "${PREVIOUS_CURRENT}" != "$(readlink -f "${RELEASE_DIR}")" && -d "${PREVIOUS_CURRENT}" ]]; then
+      echo "restoring previous current -> ${PREVIOUS_CURRENT}" >&2
+      ln -sfn "${PREVIOUS_CURRENT}" "${SOMBREADO_ROOT}/current.new"
+      mv -Tf "${SOMBREADO_ROOT}/current.new" "${SOMBREADO_ROOT}/current"
+      if [[ "$(id -u)" -eq 0 ]] && id -u sombreado >/dev/null 2>&1; then
+        chown -h sombreado:sombreado "${SOMBREADO_ROOT}/current" || true
+      fi
+      "${SYSTEMCTL}" restart sombreado-api.service
+    else
+      echo "no previous current to restore" >&2
+    fi
     exit 1
   fi
   sleep 1
