@@ -157,7 +157,7 @@ def test_deploy_flips_symlink_restarts_api_and_preserves_data_dir(tmp_path: Path
     assert "restart sombreado-api.service" in systemctl_log
 
 
-def test_deploy_restores_previous_current_when_health_check_fails(tmp_path: Path):
+def test_deploy_restores_previous_current_and_reprobes_health(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
     unit_dir = tmp_path / "etc" / "systemd" / "system"
@@ -165,6 +165,9 @@ def test_deploy_restores_previous_current_when_health_check_fails(tmp_path: Path
     deploy_lib = tmp_path / "usr" / "local" / "lib" / "sombreado"
     bin_dir = tmp_path / "bin"
     log = tmp_path / "systemctl.log"
+    allow_health = tmp_path / "allow_health"
+    restart_count = tmp_path / "restarts"
+    restart_count.write_text("0", encoding="utf-8")
 
     previous_sha = "aaaaaaa111"
     previous_dir = root / "releases" / previous_sha
@@ -187,8 +190,78 @@ def test_deploy_restores_previous_current_when_health_check_fails(tmp_path: Path
 
     _write_executable(
         bin_dir / "systemctl",
-        f"#!/bin/sh\necho \"$@\" >> '{log}'\n",
+        f"""#!/bin/sh
+echo "$@" >> '{log}'
+case "$*" in
+  *restart*sombreado-api*)
+    n=$(cat '{restart_count}')
+    n=$((n + 1))
+    echo "$n" > '{restart_count}'
+    if [ "$n" -ge 2 ]; then
+      touch '{allow_health}'
+    fi
+    ;;
+esac
+""",
     )
+    _write_executable(
+        bin_dir / "uv",
+        "#!/bin/sh\nmkdir -p .venv/bin\ntouch .venv/bin/uvicorn .venv/bin/sombreado-scrape\n",
+    )
+    _write_executable(
+        bin_dir / "curl",
+        f"#!/bin/sh\nif [ -f '{allow_health}' ]; then exit 0; fi\nexit 1\n",
+    )
+
+    env = _base_deploy_env(
+        bin_dir=bin_dir,
+        root=root,
+        data_root=data_root,
+        unit_dir=unit_dir,
+        env_file=env_file,
+        deploy_lib=deploy_lib,
+        release_sha=release_sha,
+        extra={"HEALTH_TIMEOUT_SECONDS": "1", "ROLLBACK_HEALTH_TIMEOUT_SECONDS": "5"},
+    )
+
+    result = subprocess.run(
+        [str(DEPLOY_SCRIPT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "API health check failed" in result.stderr
+    assert "restoring previous current" in result.stderr
+    assert "rolled back to previous release" in result.stderr
+    assert "previous release also failed health" not in result.stderr
+    assert (root / "current").resolve() == previous_dir.resolve()
+    assert "ExecStart=/bin/evil" not in (unit_dir / "sombreado-api.service").read_text(encoding="utf-8")
+    assert log.read_text(encoding="utf-8").count("restart sombreado-api.service") >= 2
+
+
+def test_deploy_reports_when_previous_release_also_fails_health(tmp_path: Path):
+    root = tmp_path / "opt" / "sombreado"
+    data_root = tmp_path / "var" / "lib" / "sombreado"
+    unit_dir = tmp_path / "etc" / "systemd" / "system"
+    env_file = tmp_path / "etc" / "sombreado" / "env"
+    deploy_lib = tmp_path / "usr" / "local" / "lib" / "sombreado"
+    bin_dir = tmp_path / "bin"
+
+    previous_dir = root / "releases" / "aaaaaaa111"
+    _seed_release_tree(previous_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "current").symlink_to(previous_dir)
+
+    release_sha = "deadbeef01"
+    _seed_release_tree(root / "releases" / release_sha)
+    _seed_root_owned_units(deploy_lib)
+    data_root.mkdir(parents=True)
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("SQLITE_DATABASE_PATH=/var/lib/sombreado/routes.sqlite\n", encoding="utf-8")
+
+    _write_executable(bin_dir / "systemctl", "#!/bin/sh\nexit 0\n")
     _write_executable(
         bin_dir / "uv",
         "#!/bin/sh\nmkdir -p .venv/bin\ntouch .venv/bin/uvicorn .venv/bin/sombreado-scrape\n",
@@ -203,7 +276,7 @@ def test_deploy_restores_previous_current_when_health_check_fails(tmp_path: Path
         env_file=env_file,
         deploy_lib=deploy_lib,
         release_sha=release_sha,
-        extra={"HEALTH_TIMEOUT_SECONDS": "1"},
+        extra={"HEALTH_TIMEOUT_SECONDS": "1", "ROLLBACK_HEALTH_TIMEOUT_SECONDS": "1"},
     )
 
     result = subprocess.run(
@@ -214,11 +287,8 @@ def test_deploy_restores_previous_current_when_health_check_fails(tmp_path: Path
         check=False,
     )
     assert result.returncode != 0
-    assert "API health check failed" in result.stderr
-    assert "restoring previous current" in result.stderr
+    assert "previous release also failed health after rollback restart" in result.stderr
     assert (root / "current").resolve() == previous_dir.resolve()
-    assert "ExecStart=/bin/evil" not in (unit_dir / "sombreado-api.service").read_text(encoding="utf-8")
-    assert log.read_text(encoding="utf-8").count("restart sombreado-api.service") >= 2
 
 
 def test_activator_rejects_invalid_sha_and_execs_root_owned_script(tmp_path: Path):
@@ -232,6 +302,7 @@ def test_activator_rejects_invalid_sha_and_execs_root_owned_script(tmp_path: Pat
 
     env = os.environ.copy()
     env["SOMBREADO_DEPLOY_LIB"] = str(lib)
+    env["SOMBREADO_ENFORCE_SCRIPT_OWNERSHIP"] = "0"
 
     bad = subprocess.run(
         [str(ACTIVATOR_SCRIPT), "../evil"],
@@ -252,6 +323,26 @@ def test_activator_rejects_invalid_sha_and_execs_root_owned_script(tmp_path: Pat
     )
     assert good.returncode == 0, good.stdout + good.stderr
     assert sbin_log.read_text(encoding="utf-8").strip() == "sha=abc1234"
+
+
+def test_activator_rejects_non_root_owned_deploy_script(tmp_path: Path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    _write_executable(lib / "deploy-release.sh", "#!/bin/sh\nexit 0\n")
+
+    env = os.environ.copy()
+    env["SOMBREADO_DEPLOY_LIB"] = str(lib)
+    env["SOMBREADO_ENFORCE_SCRIPT_OWNERSHIP"] = "1"
+
+    result = subprocess.run(
+        [str(ACTIVATOR_SCRIPT), "abc1234"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "deploy script not root-owned" in result.stderr
 
 
 def test_bootstrap_installs_fixed_activator_units_and_safe_sudoers(tmp_path: Path):

@@ -6,7 +6,23 @@
 set -euo pipefail
 
 SOMBREADO_DEPLOY_LIB="${SOMBREADO_DEPLOY_LIB:-/usr/local/lib/sombreado}"
+SOMBREADO_ENFORCE_SCRIPT_OWNERSHIP="${SOMBREADO_ENFORCE_SCRIPT_OWNERSHIP:-1}"
 RELEASE_SHA="${1:-${RELEASE_SHA:-}}"
+
+assert_trusted_path() {
+  local path="$1"
+  local owner mode
+  owner="$(stat -c '%u' "${path}")"
+  mode="$(stat -c '%a' "${path}")"
+  if [[ "${owner}" != "0" ]]; then
+    echo "deploy script not root-owned: ${path} (uid=${owner})" >&2
+    return 1
+  fi
+  if (( (8#${mode} & 8#022) != 0 )); then
+    echo "deploy script is group/world-writable: ${path} (mode=${mode})" >&2
+    return 1
+  fi
+}
 
 if [[ -z "${RELEASE_SHA}" ]]; then
   echo "usage: sombreado-deploy-release <release-sha>" >&2
@@ -23,6 +39,10 @@ if [[ ! -x "${DEPLOY_SCRIPT}" ]]; then
   echo "root-owned deploy script missing or not executable: ${DEPLOY_SCRIPT}" >&2
   echo "re-run deploy/bootstrap-vm.sh as root" >&2
   exit 1
+fi
+
+if [[ "${SOMBREADO_ENFORCE_SCRIPT_OWNERSHIP}" == "1" ]]; then
+  assert_trusted_path "${DEPLOY_SCRIPT}"
 fi
 
 export RELEASE_SHA

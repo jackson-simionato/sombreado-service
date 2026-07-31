@@ -14,7 +14,8 @@
 # Overrides for tests / non-standard roots:
 #   SOMBREADO_ROOT SOMBREADO_DATA_ROOT SOMBREADO_UNIT_DIR SOMBREADO_ENV_FILE
 #   SOMBREADO_DEPLOY_LIB SOMBREADO_UNIT_SOURCE SOMBREADO_ENFORCE_UNIT_OWNERSHIP
-#   SYSTEMCTL UV KEEP_RELEASES HEALTH_URL HEALTH_TIMEOUT_SECONDS CURL
+#   SYSTEMCTL UV KEEP_RELEASES HEALTH_URL HEALTH_TIMEOUT_SECONDS
+#   ROLLBACK_HEALTH_TIMEOUT_SECONDS CURL
 
 set -euo pipefail
 
@@ -31,6 +32,7 @@ CURL="${CURL:-curl}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health/live}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
+ROLLBACK_HEALTH_TIMEOUT_SECONDS="${ROLLBACK_HEALTH_TIMEOUT_SECONDS:-30}"
 
 UNIT_NAMES=(
   sombreado-api.service
@@ -141,26 +143,41 @@ echo "reloading systemd and enabling runtime units"
 "${SYSTEMCTL}" enable --now sombreado-backup.timer
 "${SYSTEMCTL}" restart sombreado-api.service
 
-echo "waiting for API health at ${HEALTH_URL}"
-deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
-until "${CURL}" -fsS --max-time 2 "${HEALTH_URL}" >/dev/null 2>&1; do
-  if (( SECONDS >= deadline )); then
-    echo "API health check failed after ${HEALTH_TIMEOUT_SECONDS}s: ${HEALTH_URL}" >&2
-    if [[ -n "${PREVIOUS_CURRENT}" && "${PREVIOUS_CURRENT}" != "$(readlink -f "${RELEASE_DIR}")" && -d "${PREVIOUS_CURRENT}" ]]; then
-      echo "restoring previous current -> ${PREVIOUS_CURRENT}" >&2
-      ln -sfn "${PREVIOUS_CURRENT}" "${SOMBREADO_ROOT}/current.new"
-      mv -Tf "${SOMBREADO_ROOT}/current.new" "${SOMBREADO_ROOT}/current"
-      if [[ "$(id -u)" -eq 0 ]] && id -u sombreado >/dev/null 2>&1; then
-        chown -h sombreado:sombreado "${SOMBREADO_ROOT}/current" || true
-      fi
-      "${SYSTEMCTL}" restart sombreado-api.service
-    else
-      echo "no previous current to restore" >&2
+wait_for_health() {
+  local timeout_seconds="$1"
+  local label="$2"
+  local deadline=$((SECONDS + timeout_seconds))
+  echo "waiting for API health (${label}) at ${HEALTH_URL}"
+  until "${CURL}" -fsS --max-time 2 "${HEALTH_URL}" >/dev/null 2>&1; do
+    if (( SECONDS >= deadline )); then
+      echo "API health check failed after ${timeout_seconds}s (${label}): ${HEALTH_URL}" >&2
+      return 1
     fi
-    exit 1
+    sleep 1
+  done
+  echo "API health ok (${label})"
+  return 0
+}
+
+if ! wait_for_health "${HEALTH_TIMEOUT_SECONDS}" "new release"; then
+  if [[ -n "${PREVIOUS_CURRENT}" && "${PREVIOUS_CURRENT}" != "$(readlink -f "${RELEASE_DIR}")" && -d "${PREVIOUS_CURRENT}" ]]; then
+    echo "restoring previous current -> ${PREVIOUS_CURRENT}" >&2
+    ln -sfn "${PREVIOUS_CURRENT}" "${SOMBREADO_ROOT}/current.new"
+    mv -Tf "${SOMBREADO_ROOT}/current.new" "${SOMBREADO_ROOT}/current"
+    if [[ "$(id -u)" -eq 0 ]] && id -u sombreado >/dev/null 2>&1; then
+      chown -h sombreado:sombreado "${SOMBREADO_ROOT}/current" || true
+    fi
+    "${SYSTEMCTL}" restart sombreado-api.service
+    if wait_for_health "${ROLLBACK_HEALTH_TIMEOUT_SECONDS}" "restored previous release"; then
+      echo "rolled back to previous release; new release failed health" >&2
+    else
+      echo "previous release also failed health after rollback restart" >&2
+    fi
+  else
+    echo "no previous current to restore" >&2
   fi
-  sleep 1
-done
+  exit 1
+fi
 
 # Prune old releases; never touch SOMBREADO_DATA_ROOT.
 if [[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] && [[ "${KEEP_RELEASES}" -gt 0 ]]; then
