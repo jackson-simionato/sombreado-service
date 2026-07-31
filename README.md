@@ -79,37 +79,15 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test
 
 Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. Nearby uses PostGIS geography (`ST_DWithin` + GIST) against the `current` pointer.
 
-## Production (Oracle VM)
+## Production (Render Free + Neon)
 
-Production runs on one Oracle Always Free VM. Layout:
+Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (`DATABASE_URL` Runtime Secret on Render). Scrape/publish runs as a GitHub Actions job against Neon (not on the web instance). After CI passes on `main`, deploy is via Render Deploy Hook (Pipeline Secret); see epic #66 / ADR 0005 when wired.
 
-| Path | Role |
-| --- | --- |
-| `/opt/sombreado/releases/<sha>` | Immutable-ish release trees |
-| `/opt/sombreado/current` | Symlink to the active release |
-| `/var/lib/sombreado/` | Durable Generation Store + backup work dirs (**never** deleted by deploy) |
-| `/etc/sombreado/env` | Runtime secrets (`EnvironmentFile`) |
+Recovery beyond Neon’s short PITR window is a fresh scrape. `sombreado-scrape backup` / `restore` are parked and are not the production backup path.
 
-systemd units (under `deploy/systemd/`):
+### Retired: Oracle Always Free VM
 
-- `sombreado-api.service` — passenger API on `127.0.0.1:8000`, start on boot
-- `sombreado-scrape.timer` → oneshot `sombreado-scrape scrape` (daily; DB scrape lease for mutual exclusion)
-- `sombreado-backup.timer` → oneshot `sombreado-scrape backup`
-
-One-time host prep (as root):
-
-```bash
-sudo DEPLOY_USER=ubuntu ./deploy/bootstrap-vm.sh
-# edit /etc/sombreado/env (from deploy/env.example)
-# bootstrap installs/copies uv to /usr/local/bin/uv when available on root PATH
-# re-run bootstrap after changing activator, deploy-release.sh, or deploy/systemd/*
-```
-
-`DEPLOY_USER` is the GitHub Actions SSH login: bootstrap adds it to group `sombreado` (rsync into `/opt/sombreado/releases`) and installs a sudoers drop-in for the **fixed** root-owned activator `/usr/local/sbin/sombreado-deploy-release` only (never a path under the writable release tree). systemd units are copied into `/usr/local/lib/sombreado/systemd` at bootstrap and installed from there on activate — not from the rsynced release. Activate rejects symlink release trees and runs `uv sync` as `sombreado` (prefer `uv` at `/usr/local/bin/uv`). On Oracle A1 (aarch64), confirm `uv sync --frozen --no-dev` resolves wheels before relying on deploys.
-
-After CI passes on `main`, GitHub Actions rsyncs the commit into `/opt/sombreado/releases/<sha>`, then runs `sudo /usr/local/sbin/sombreado-deploy-release <sha>` (symlink flip + restart + `/health/ready` check). Configure repository secrets `VM_HOST`, `VM_USER`, `VM_SSH_PRIVATE_KEY`, and `VM_SSH_KNOWN_HOSTS` (optional `VM_PORT`). `VM_SSH_KNOWN_HOSTS` must be the pinned `known_hosts` line(s) for the VM — CI does not use `ssh-keyscan`. Missing secrets fail the deploy job unless `ALLOW_SKIP_DEPLOY=1` is set. Activate rollback restores previous code only; it does not downgrade SQLite schema.
-
-Put a reverse proxy (Caddy/nginx + Let’s Encrypt) in front of `127.0.0.1:8000`. Browser URL cutover is a separate production step.
+The Oracle VM layout under `deploy/` (rsync releases, systemd `sombreado-api` / scrape / backup timers, on-host SQLite under `/var/lib/sombreado/`) is **historical**. Do not treat those units or `sombreado-backup.timer` as the current Generation Store path.
 
 ## Public Endpoints
 
