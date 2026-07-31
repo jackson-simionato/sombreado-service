@@ -57,6 +57,8 @@ def _base_deploy_env(
             "SOMBREADO_UNIT_DIR": str(unit_dir),
             "SOMBREADO_ENV_FILE": str(env_file),
             "SOMBREADO_DEPLOY_LIB": str(deploy_lib),
+            # Non-root test trees cannot satisfy uid=0 ownership checks.
+            "SOMBREADO_ENFORCE_UNIT_OWNERSHIP": "0",
             "RELEASE_SHA": release_sha,
             "SYSTEMCTL": str(bin_dir / "systemctl"),
             "UV": str(bin_dir / "uv"),
@@ -312,11 +314,49 @@ def test_bootstrap_installs_fixed_activator_units_and_safe_sudoers(tmp_path: Pat
     assert env_file.read_text(encoding="utf-8") == "CUSTOM=1\n"
 
 
-def test_deploy_installs_units_only_from_root_owned_source():
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    assert "SOMBREADO_UNIT_SOURCE" in script
-    assert "${RELEASE_DIR}/deploy/systemd" not in script
-    assert '"${RELEASE_DIR}/deploy/systemd"' not in script
+def test_deploy_rejects_non_root_owned_unit_source_when_enforced(tmp_path: Path):
+    root = tmp_path / "opt" / "sombreado"
+    data_root = tmp_path / "var" / "lib" / "sombreado"
+    unit_dir = tmp_path / "etc" / "systemd" / "system"
+    env_file = tmp_path / "etc" / "sombreado" / "env"
+    deploy_lib = tmp_path / "usr" / "local" / "lib" / "sombreado"
+    bin_dir = tmp_path / "bin"
+
+    release_sha = "abc1234"
+    release_dir = root / "releases" / release_sha
+    _seed_release_tree(release_dir)
+    _seed_root_owned_units(deploy_lib)
+    data_root.mkdir(parents=True)
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("SQLITE_DATABASE_PATH=/var/lib/sombreado/routes.sqlite\n", encoding="utf-8")
+
+    _write_executable(bin_dir / "systemctl", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        bin_dir / "uv",
+        "#!/bin/sh\nmkdir -p .venv/bin\ntouch .venv/bin/uvicorn .venv/bin/sombreado-scrape\n",
+    )
+    _write_executable(bin_dir / "curl", "#!/bin/sh\nexit 0\n")
+
+    env = _base_deploy_env(
+        bin_dir=bin_dir,
+        root=root,
+        data_root=data_root,
+        unit_dir=unit_dir,
+        env_file=env_file,
+        deploy_lib=deploy_lib,
+        release_sha=release_sha,
+        extra={"SOMBREADO_ENFORCE_UNIT_OWNERSHIP": "1"},
+    )
+
+    result = subprocess.run(
+        [str(DEPLOY_SCRIPT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "unit path not root-owned" in result.stderr
 
 
 def test_systemd_units_point_at_release_symlink_and_harden_filesystem():

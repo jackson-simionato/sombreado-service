@@ -106,6 +106,21 @@ else
   echo "keeping existing ${SOMBREADO_ENV_DIR}/env"
 fi
 
+# Prefer a world-traversable uv binary. Deploy syncs as root then chowns .venv,
+# so /root/.local/bin/uv works for activate, but /usr/local/bin/uv is clearer for ops.
+if [[ "$(id -u)" -eq 0 ]]; then
+  if command -v uv >/dev/null 2>&1; then
+    uv_src="$(command -v uv)"
+    if [[ "${uv_src}" != /usr/local/bin/uv ]]; then
+      install -m 0755 "${uv_src}" /usr/local/bin/uv
+      echo "installed uv -> /usr/local/bin/uv (from ${uv_src})"
+    fi
+  else
+    echo "WARNING: uv not on PATH; install to /usr/local/bin/uv before the first deploy" >&2
+    echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    echo "  install -m 0755 \"\${HOME}/.local/bin/uv\" /usr/local/bin/uv" >&2
+  fi
+fi
+
 echo "bootstrap complete: root=${SOMBREADO_ROOT} data=${SOMBREADO_DATA_ROOT} activator=${ACTIVATOR_PATH}"
-echo "ensure uv is on root PATH (curl -LsSf https://astral.sh/uv/install.sh | sh)"
 echo "on Oracle A1 (aarch64), confirm dependency wheels install via: uv sync --frozen --no-dev"

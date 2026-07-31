@@ -114,11 +114,11 @@ One-time host prep (as root):
 ```bash
 sudo DEPLOY_USER=ubuntu ./deploy/bootstrap-vm.sh
 # edit /etc/sombreado/env (from deploy/env.example)
-# install uv on the host (must be on root PATH for deploy-release.sh)
+# bootstrap installs/copies uv to /usr/local/bin/uv when available on root PATH
 # re-run bootstrap after changing activator, deploy-release.sh, or deploy/systemd/*
 ```
 
-`DEPLOY_USER` is the GitHub Actions SSH login: bootstrap adds it to group `sombreado` (rsync into `/opt/sombreado/releases`) and installs a sudoers drop-in for the **fixed** root-owned activator `/usr/local/sbin/sombreado-deploy-release` only (never a path under the writable release tree). systemd units are copied into `/usr/local/lib/sombreado/systemd` at bootstrap and installed from there on activate — not from the rsynced release. On Oracle A1 (aarch64), confirm `uv sync --frozen --no-dev` resolves wheels before relying on deploys.
+`DEPLOY_USER` is the GitHub Actions SSH login: bootstrap adds it to group `sombreado` (rsync into `/opt/sombreado/releases`) and installs a sudoers drop-in for the **fixed** root-owned activator `/usr/local/sbin/sombreado-deploy-release` only (never a path under the writable release tree). systemd units are copied into `/usr/local/lib/sombreado/systemd` at bootstrap and installed from there on activate — not from the rsynced release. Activate runs `uv sync` as root (then `chown`s the release/`.venv` to `sombreado`) so a root-only uv install still works. On Oracle A1 (aarch64), confirm `uv sync --frozen --no-dev` resolves wheels before relying on deploys.
 
 After CI passes on `main`, GitHub Actions rsyncs the commit into `/opt/sombreado/releases/<sha>`, then runs `sudo /usr/local/sbin/sombreado-deploy-release <sha>` (symlink flip + restart + `/health/live` check). Configure repository secrets `VM_HOST`, `VM_USER`, `VM_SSH_PRIVATE_KEY`, and `VM_SSH_KNOWN_HOSTS` (optional `VM_PORT`). `VM_SSH_KNOWN_HOSTS` must be the pinned `known_hosts` line(s) for the VM — CI does not use `ssh-keyscan`. Deploy is skipped when those secrets are absent.
 

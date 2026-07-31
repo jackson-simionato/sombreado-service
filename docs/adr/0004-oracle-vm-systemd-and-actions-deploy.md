@@ -7,5 +7,5 @@ This supersedes the Render Free *runtime target* in ADR 0001 while keeping GitHu
 ## Consequences
 
 - Operators own OS updates, firewall, TLS termination, and Always Free reclamation risk.
-- First host bootstrap uses `deploy/bootstrap-vm.sh` (installs root-owned activator, deploy script, and systemd unit templates under `/usr/local`); each release is activated via that fixed path. Unit files are never installed from the deployer-writable release tree.
+- First host bootstrap uses `deploy/bootstrap-vm.sh` (installs root-owned activator, deploy script, and systemd unit templates under `/usr/local`, and prefers `uv` at `/usr/local/bin/uv`); each release is activated via that fixed path. Unit files are never installed from the deployer-writable release tree, and activate rejects unit templates that are not root-owned or that are group/world-writable. `uv sync` runs as root then chowns the release to `sombreado`.
 - Cutover of the browser `NEXT_PUBLIC_API_URL` (or DNS) remains a separate production step.
