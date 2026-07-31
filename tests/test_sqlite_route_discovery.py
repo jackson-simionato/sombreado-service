@@ -313,6 +313,38 @@ async def test_geometry_returns_frontend_polyline_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
+async def test_geometry_returns_stale_version_error_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    direction_id = _id("direction-a-ida")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/v1/routes/{route_id}/directions/{direction_id}/geometry",
+            params={"routeVersionId": _id("version-stale")},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "routeVersionStale"
+
+
+@pytest.mark.asyncio
+async def test_geometry_returns_direction_not_found_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/v1/routes/{route_id}/directions/{_id('direction-missing')}/geometry",
+            params={"routeVersionId": version_id},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "routeDirectionNotFound"
+
+
+@pytest.mark.asyncio
 async def test_preview_advice_uses_current_geometry_from_sqlite(sqlite_api):
     app, _store, _path = sqlite_api
     route_id = _id("route-a")
@@ -348,6 +380,52 @@ async def test_preview_advice_uses_current_geometry_from_sqlite(sqlite_api):
         "lng": -48.53424287871695,
         "source": "directionStart",
     }
+
+
+@pytest.mark.asyncio
+async def test_advice_returns_stale_version_error_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    direction_id = _id("direction-a-ida")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": route_id,
+                "routeVersionId": _id("version-stale"),
+                "routeDirectionId": direction_id,
+                "mode": "preview",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00Z",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "routeVersionStale"
+
+
+@pytest.mark.asyncio
+async def test_advice_returns_direction_not_found_from_sqlite(sqlite_api):
+    app, _store, _path = sqlite_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/advice",
+            json={
+                "routeId": route_id,
+                "routeVersionId": version_id,
+                "routeDirectionId": _id("direction-missing"),
+                "mode": "preview",
+                "horizon": "remainingRoute",
+                "observedAt": "2026-01-15T15:00:00Z",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "routeDirectionNotFound"
 
 
 @pytest.mark.asyncio

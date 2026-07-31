@@ -1,8 +1,6 @@
 import math
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from sombreado.domain.schemas import LatLngPoint, RouteSegment
+from sombreado.domain.schemas import LatLngPoint, RouteSegment
 
 EARTH_RADIUS_METERS = 6_371_000
 
@@ -33,10 +31,8 @@ def midpoint(coordinates: list[tuple[float, float]]) -> tuple[float, float]:
     return ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
 
 
-def flatten_route_polyline(segments: list["RouteSegment"]) -> list["LatLngPoint"]:
+def flatten_route_polyline(segments: list[RouteSegment]) -> list[LatLngPoint]:
     """Collapse ordered segment coordinates into a passenger polyline (lat/lng)."""
-    from sombreado.domain.schemas import LatLngPoint
-
     polyline: list[LatLngPoint] = []
     for segment in segments:
         for lng, lat in segment.coordinates:
