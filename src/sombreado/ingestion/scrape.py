@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import sleep
 from typing import Literal, Protocol
 from uuid import uuid4
+
+import psycopg
 
 from sombreado.store.generation import CanonicalRows, GenerationStore, ScrapeLeaseHeldError
 
@@ -18,7 +19,7 @@ ScrapeOutcomeStatus = Literal["published", "failed", "lease_held"]
 
 # Transient/source failures worth one automatic retry. Programming errors propagate.
 _RETRYABLE_COLLECT_ERRORS = (OSError, PermissionError, RuntimeError, TimeoutError, ValueError)
-_RETRYABLE_PUBLISH_ERRORS = (RuntimeError, ValueError, sqlite3.Error)
+_RETRYABLE_PUBLISH_ERRORS = (RuntimeError, ValueError, psycopg.Error)
 
 
 @dataclass(frozen=True)

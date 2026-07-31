@@ -15,10 +15,8 @@ from sombreado.store.object_storage import (
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # Legacy PostGIS URL for optional RouteReadService / store.db callers only.
-    # Passenger API runtime uses sqlite_database_path and does not require this.
+    # Neon/PostGIS Generation Store DSN (Runtime Secret). Required for API/CLI via require_*.
     database_url: str = ""
-    sqlite_database_path: Path = Path("data/sombreado.sqlite")
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )
@@ -31,6 +29,7 @@ class Settings(BaseSettings):
     off_route_threshold_meters: float = 75
     nominal_bus_speed_kmh: float = 18
 
+    # Parked Object Storage / backup settings (not a v1 Generation Store path).
     object_storage_backend: Literal["directory", "s3"] = "directory"
     object_storage_directory: Path = Path("data/object-storage")
     object_storage_s3_endpoint: str = ""
@@ -45,8 +44,8 @@ class Settings(BaseSettings):
 
     def require_api(self) -> "Settings":
         """Validate the settings subset required by the API process."""
-        if not str(self.sqlite_database_path).strip():
-            raise ValueError("SQLITE_DATABASE_PATH must be non-empty for the API")
+        if not self.database_url.strip():
+            raise ValueError("DATABASE_URL must be non-empty for the API")
         if not self.cors_origins:
             raise ValueError("CORS_ORIGINS must include at least one origin for the API")
         if self.route_candidate_nearby_limit < 1 or self.route_candidate_search_limit < 1:
@@ -57,12 +56,12 @@ class Settings(BaseSettings):
 
     def require_cli(self) -> "Settings":
         """Validate the settings subset required by the scrape CLI process."""
-        if not str(self.sqlite_database_path).strip():
-            raise ValueError("SQLITE_DATABASE_PATH must be non-empty for the scrape CLI")
+        if not self.database_url.strip():
+            raise ValueError("DATABASE_URL must be non-empty for the scrape CLI")
         return self
 
     def require_backup(self) -> "Settings":
-        """Validate settings required by backup/restore commands."""
+        """Validate settings required by parked backup/restore commands."""
         self.require_cli()
         if self.backup_retain < 1:
             raise ValueError("BACKUP_RETAIN must be >= 1")

@@ -10,7 +10,7 @@ async def get_settings_dependency() -> Settings:
 
 
 def get_generation_store() -> GenerationStore:
-    return GenerationStore(get_api_settings().sqlite_database_path)
+    return GenerationStore(get_api_settings().database_url)
 
 
 def get_current_route_service() -> CurrentRouteReadService:

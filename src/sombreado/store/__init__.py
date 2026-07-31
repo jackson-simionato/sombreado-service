@@ -1,9 +1,9 @@
 """Durable datastore access.
 
 Passenger Route Discovery, Direction Choices, Route Geometry, and Advice read the
-SQLite Generation Store `current` pointer.
+Neon/PostGIS Generation Store `current` pointer.
 """
 
-from sombreado.store.generation import GenerationStore, ScrapeLeaseHeldError
+from sombreado.store.generation import GenerationStore, ScrapeLeaseHeldError, redacted_database_url
 
-__all__ = ["GenerationStore", "ScrapeLeaseHeldError"]
+__all__ = ["GenerationStore", "ScrapeLeaseHeldError", "redacted_database_url"]

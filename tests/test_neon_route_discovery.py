@@ -1,8 +1,7 @@
-"""Browser contract for passenger reads via SQLite current (discovery through advice)."""
+"""Browser contract for passenger reads via Neon current (discovery through advice)."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from uuid import UUID, uuid5
 
 import pytest
@@ -164,20 +163,19 @@ def _contract_rows(*, suffix: str, dual_directions: bool = False) -> dict[str, l
 
 
 @pytest.fixture
-def sqlite_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    database_path = tmp_path / "routes.sqlite"
-    store = GenerationStore(database_path)
+def neon_api(database_url: str, monkeypatch: pytest.MonkeyPatch):
+    store = GenerationStore(database_url)
     publish_fixture(store, _contract_rows(suffix="a", dual_directions=True), generation_id="gen-a")
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     app = create_app()
-    yield app, store, database_path
+    yield app, store, database_url
     get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
-async def test_search_returns_current_route_candidates_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_search_returns_current_route_candidates_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
 
@@ -200,8 +198,8 @@ async def test_search_returns_current_route_candidates_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_nearby_returns_current_route_candidates_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_nearby_returns_current_route_candidates_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
 
@@ -225,8 +223,8 @@ async def test_nearby_returns_current_route_candidates_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_direction_choices_match_browser_contract_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_direction_choices_match_browser_contract_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
 
@@ -258,8 +256,7 @@ async def test_direction_choices_match_browser_contract_from_sqlite(sqlite_api):
     }
 
 
-def test_store_geometry_reads_current_segments_and_membership(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
+def test_store_geometry_reads_current_segments_and_membership(store: GenerationStore):
     publish_fixture(store, _contract_rows(suffix="a", dual_directions=True), generation_id="gen-a")
     version_id = _id("version-a")
     direction_ida = _id("direction-a-ida")
@@ -286,8 +283,8 @@ def test_store_geometry_reads_current_segments_and_membership(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_geometry_returns_frontend_polyline_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_geometry_returns_frontend_polyline_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
     direction_id = _id("direction-a-ida")
@@ -313,8 +310,8 @@ async def test_geometry_returns_frontend_polyline_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_geometry_returns_stale_version_error_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_geometry_returns_stale_version_error_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     direction_id = _id("direction-a-ida")
 
@@ -329,8 +326,8 @@ async def test_geometry_returns_stale_version_error_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_geometry_returns_direction_not_found_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_geometry_returns_direction_not_found_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
 
@@ -345,8 +342,8 @@ async def test_geometry_returns_direction_not_found_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_preview_advice_uses_current_geometry_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_preview_advice_uses_current_geometry_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
     direction_id = _id("direction-a-ida")
@@ -383,8 +380,8 @@ async def test_preview_advice_uses_current_geometry_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_advice_returns_stale_version_error_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_advice_returns_stale_version_error_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     direction_id = _id("direction-a-ida")
 
@@ -406,8 +403,8 @@ async def test_advice_returns_stale_version_error_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_advice_returns_direction_not_found_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_advice_returns_direction_not_found_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
 
@@ -429,8 +426,8 @@ async def test_advice_returns_direction_not_found_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_onboard_advice_uses_current_geometry_from_sqlite(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_onboard_advice_uses_current_geometry_from_neon(neon_api):
+    app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
     direction_id = _id("direction-a-ida")
@@ -463,8 +460,8 @@ async def test_onboard_advice_uses_current_geometry_from_sqlite(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_full_passenger_flow_without_scraper_database(sqlite_api):
-    app, _store, _path = sqlite_api
+async def test_full_passenger_flow_on_neon_store(neon_api):
+    app, _store, _path = neon_api
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         search = await client.get("/v1/route-candidates/search", params={"query": "3A"})
@@ -503,9 +500,8 @@ async def test_full_passenger_flow_without_scraper_database(sqlite_api):
 
 
 @pytest.mark.asyncio
-async def test_discovery_reads_never_expose_staging_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    database_path = tmp_path / "routes.sqlite"
-    store = GenerationStore(database_path)
+async def test_discovery_reads_never_expose_staging_generation(database_url: str, monkeypatch: pytest.MonkeyPatch):
+    store = GenerationStore(database_url)
     publish_fixture(store, _contract_rows(suffix="a", dual_directions=True), generation_id="gen-a")
     store.claim_scrape_lease("stage-b")
     try:
@@ -513,7 +509,7 @@ async def test_discovery_reads_never_expose_staging_generation(tmp_path: Path, m
     finally:
         store.release_scrape_lease("stage-b")
 
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     app = create_app()
     try:
@@ -552,17 +548,16 @@ async def test_discovery_reads_never_expose_staging_generation(tmp_path: Path, m
     assert staging_advice.json()["error"]["code"] == "routeNotFound"
 
 
-def test_settings_accept_sqlite_database_path_for_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SQLITE_DATABASE_PATH", str(tmp_path / "api.sqlite"))
+def test_settings_accept_database_url_for_api(database_url: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     try:
         settings = Settings().require_api()
-        assert settings.sqlite_database_path == tmp_path / "api.sqlite"
+        assert settings.database_url == database_url
     finally:
         get_settings.cache_clear()
 
 
-def test_sample_rows_remain_publishable_beside_contract_fixture(tmp_path: Path):
-    store = GenerationStore(tmp_path / "sample.sqlite")
+def test_sample_rows_remain_publishable_beside_contract_fixture(store: GenerationStore):
     publish_fixture(store, sample_generation_rows(generation_suffix="demo"), generation_id="demo")
     assert store.current_generation() == "demo"

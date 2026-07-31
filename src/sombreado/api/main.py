@@ -10,27 +10,29 @@ from sombreado.api.errors import (
     validation_exception_handler,
 )
 from sombreado.api.routes import advisory, health, nearby, route_candidates
-from sombreado.config import get_api_settings
+from sombreado.config import get_api_settings, get_settings
 from sombreado.domain.errors import ServiceError
 from sombreado.logging import configure_logging, get_logger
-from sombreado.store import GenerationStore
+from sombreado.store import GenerationStore, redacted_database_url
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_api_settings()
-    store = GenerationStore(settings.sqlite_database_path)
+    store = GenerationStore(settings.database_url)
     store.migrate()
     get_logger(__name__).info(
         "Applied Generation Store migrations database=%s current=%s",
-        settings.sqlite_database_path,
+        redacted_database_url(settings.database_url),
         store.current_generation(),
     )
     yield
 
 
 def create_app() -> FastAPI:
-    settings = get_api_settings()
+    # CORS/logging may load before DATABASE_URL is set (module import / test setup).
+    # Lifespan and deps call get_api_settings() and require a non-empty DATABASE_URL.
+    settings = get_settings()
     configure_logging(settings.log_level)
 
     app = FastAPI(title="sombreado-service", lifespan=lifespan)

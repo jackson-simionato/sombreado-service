@@ -14,6 +14,7 @@ dependencies = [
     "geoalchemy2>=0.15.0",
     "geographiclib>=2.1",
     "httpx>=0.28.1",
+    "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.6.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "typer>=0.16.0",

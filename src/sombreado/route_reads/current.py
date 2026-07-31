@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from collections.abc import Callable
 from typing import TypeVar
 from uuid import UUID
+
+import psycopg
 
 from sombreado.domain.geometry import parse_linestring_wkt
 from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirectionKind, RouteSegment
@@ -25,9 +26,9 @@ _T = TypeVar("_T")
 
 
 class CurrentRouteReadService:
-    """Read passenger route data from SQLite `current` only.
+    """Read passenger route data from Generation Store `current` only.
 
-    Sync SQLite work runs in a worker thread via ``asyncio.to_thread`` so the
+    Sync Postgres work runs in a worker thread via ``asyncio.to_thread`` so the
     FastAPI event loop is not blocked by connection open / query / close.
     """
 
@@ -35,7 +36,7 @@ class CurrentRouteReadService:
         self._store = store
 
     async def search_route_candidates(self, *, query: str, limit: int) -> list[RouteCandidate]:
-        rows = await self._run_sqlite(lambda connection: search_route_candidates(connection, query=query, limit=limit))
+        rows = await self._run_store(lambda connection: search_route_candidates(connection, query=query, limit=limit))
         return [_to_route_candidate(row) for row in rows]
 
     async def find_nearby_route_candidates(
@@ -46,7 +47,7 @@ class CurrentRouteReadService:
         radius_meters: float,
         limit: int,
     ) -> list[RouteCandidate]:
-        rows = await self._run_sqlite(
+        rows = await self._run_store(
             lambda connection: find_nearby_route_candidates(
                 connection,
                 lat=lat,
@@ -58,11 +59,11 @@ class CurrentRouteReadService:
         return [_to_route_candidate(row) for row in rows]
 
     async def load_current_route_version_id(self, route_id: UUID) -> UUID | None:
-        version_id = await self._run_sqlite(lambda connection: load_current_route_version_id(connection, str(route_id)))
+        version_id = await self._run_store(lambda connection: load_current_route_version_id(connection, str(route_id)))
         return None if version_id is None else UUID(version_id)
 
     async def load_direction_choices(self, *, route_version_id: UUID) -> list[DirectionChoice]:
-        rows = await self._run_sqlite(
+        rows = await self._run_store(
             lambda connection: load_direction_choices(connection, route_version_id=str(route_version_id))
         )
         return [
@@ -82,7 +83,7 @@ class CurrentRouteReadService:
         route_version_id: UUID,
         route_direction_id: UUID,
     ) -> bool:
-        return await self._run_sqlite(
+        return await self._run_store(
             lambda connection: route_direction_belongs_to_version(
                 connection,
                 route_version_id=str(route_version_id),
@@ -96,7 +97,7 @@ class CurrentRouteReadService:
         route_version_id: UUID,
         route_direction_id: UUID,
     ) -> list[RouteSegment]:
-        rows = await self._run_sqlite(
+        rows = await self._run_store(
             lambda connection: load_current_route_segments(
                 connection,
                 route_version_id=str(route_version_id),
@@ -115,7 +116,7 @@ class CurrentRouteReadService:
             for row in rows
         ]
 
-    async def _run_sqlite(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
+    async def _run_store(self, operation: Callable[[psycopg.Connection], _T]) -> _T:
         def run() -> _T:
             with self._store.connection() as connection:
                 return operation(connection)

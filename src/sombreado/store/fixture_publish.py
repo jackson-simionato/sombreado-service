@@ -1,4 +1,4 @@
-"""Publish a fixture/snapshot generation into the SQLite store without Consórcio."""
+"""Publish a fixture/snapshot generation into the Generation Store without Consórcio."""
 
 from __future__ import annotations
 
@@ -39,13 +39,13 @@ def publish_fixture(
 
 
 def publish_demo_fixture(
-    database_path: Path,
+    database_url: str,
     *,
     fixture_path: Path | None = None,
     generation_id: str | None = None,
 ) -> tuple[str, GenerationStore]:
     """Publish either an explicit JSON fixture or the built-in demo sample."""
-    store = GenerationStore(database_path)
+    store = GenerationStore(database_url)
     rows = (
         load_canonical_rows(fixture_path)
         if fixture_path is not None

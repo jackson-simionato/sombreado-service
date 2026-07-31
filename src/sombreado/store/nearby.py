@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
+
+import psycopg
 
 from sombreado.store.discovery import find_nearby_route_candidates
 
@@ -16,13 +17,13 @@ class NearbyRoute:
 
 
 def find_nearby_routes(
-    connection: sqlite3.Connection,
+    connection: psycopg.Connection,
     *,
     lat: float,
     lng: float,
     radius_meters: float,
 ) -> tuple[NearbyRoute, ...]:
-    """Return current-generation nearby routes using the discovery nearby kernel."""
+    """Return current-generation nearby routes using PostGIS geography ST_DWithin."""
     candidates = find_nearby_route_candidates(
         connection,
         lat=lat,

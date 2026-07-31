@@ -1,7 +1,6 @@
-"""Generation-keyed SQLite store: lease, validate-then-publish, retention."""
+"""Generation-keyed PostGIS store: lease, validate-then-publish, retention."""
 
-import sqlite3
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -9,17 +8,12 @@ from sombreado.store.generation import GenerationStore, ScrapeLeaseHeldError
 from sombreado.store.sample_data import sample_generation_rows
 
 
-def test_migrate_leaves_no_current_generation(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
-
+def test_migrate_leaves_no_current_generation(store: GenerationStore):
     assert store.current_generation() is None
     assert store.previous_generation() is None
 
 
-def test_validate_then_publish_flips_current_atomically(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_validate_then_publish_flips_current_atomically(store: GenerationStore):
     rows = sample_generation_rows(generation_suffix="a")
 
     store.stage("gen-a", rows)
@@ -34,10 +28,7 @@ def test_validate_then_publish_flips_current_atomically(tmp_path: Path):
     assert set(store.current_route_version_ids()) == {row["id"] for row in rows["route_versions"]}
 
 
-def test_second_publish_retains_previous_and_drops_former_previous(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
-
+def test_second_publish_retains_previous_and_drops_former_previous(store: GenerationStore):
     store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
     store.validate("gen-a")
     store.publish("gen-a")
@@ -58,9 +49,7 @@ def test_second_publish_retains_previous_and_drops_former_previous(tmp_path: Pat
     assert not store.has_generation("gen-a")
 
 
-def test_incomplete_staging_cannot_publish(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_incomplete_staging_cannot_publish(store: GenerationStore):
     store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
     store.validate("gen-a")
     store.publish("gen-a")
@@ -74,9 +63,7 @@ def test_incomplete_staging_cannot_publish(tmp_path: Path):
     assert store.previous_generation() is None
 
 
-def test_validation_failure_discards_staging_and_keeps_current(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_validation_failure_discards_staging_and_keeps_current(store: GenerationStore):
     good = sample_generation_rows(generation_suffix="a")
     store.stage("gen-a", good)
     store.validate("gen-a")
@@ -84,7 +71,7 @@ def test_validation_failure_discards_staging_and_keeps_current(tmp_path: Path):
 
     store.stage("gen-b", sample_generation_rows(generation_suffix="b"))
     # Corrupt expected counts after stage so validate rejects before publish.
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         connection.execute(
             """
             UPDATE dataset_generation_counts
@@ -102,23 +89,21 @@ def test_validation_failure_discards_staging_and_keeps_current(tmp_path: Path):
     assert not store.has_generation("gen-b")
 
 
-def test_expired_lease_reclaim_discards_orphan_staging(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_expired_lease_reclaim_discards_orphan_staging(store: GenerationStore):
     store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
     store.validate("gen-a")
     store.publish("gen-a")
     store.stage("orphan", sample_generation_rows(generation_suffix="b"))
 
     store.claim_scrape_lease("worker-1", ttl_seconds=1)
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         connection.execute(
             """
             UPDATE scrape_lease
-            SET expires_at = ?
+            SET expires_at = %(past)s
             WHERE singleton = 1
             """,
-            ("2000-01-01T00:00:00+00:00",),
+            {"past": datetime.now(UTC) - timedelta(seconds=1)},
         )
         connection.commit()
 
@@ -129,10 +114,7 @@ def test_expired_lease_reclaim_discards_orphan_staging(tmp_path: Path):
     assert not store.has_generation("orphan")
 
 
-def test_scrape_lease_excludes_overlapping_holders(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
-
+def test_scrape_lease_excludes_overlapping_holders(store: GenerationStore):
     store.claim_scrape_lease("worker-1", ttl_seconds=600)
     with pytest.raises(ScrapeLeaseHeldError):
         store.claim_scrape_lease("worker-2", ttl_seconds=600)
@@ -160,35 +142,31 @@ def _stable_route_rows(*, generation_suffix: str, route_name: str) -> dict[str, 
     return rows
 
 
-def test_stage_does_not_mutate_shared_route_attributes_until_publish(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_stage_does_not_mutate_shared_route_attributes_until_publish(store: GenerationStore):
     store.stage("gen-a", _stable_route_rows(generation_suffix="a", route_name="Old Name"))
     store.validate("gen-a")
     store.publish("gen-a")
 
     store.stage("gen-b", _stable_route_rows(generation_suffix="b", route_name="Staged Name"))
 
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         name = connection.execute("SELECT name FROM routes WHERE id = 'route-stable'").fetchone()[0]
     assert name == "Old Name"
 
     store.discard_staging("gen-b")
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         name = connection.execute("SELECT name FROM routes WHERE id = 'route-stable'").fetchone()[0]
     assert name == "Old Name"
 
     store.stage("gen-c", _stable_route_rows(generation_suffix="c", route_name="Published Name"))
     store.validate("gen-c")
     store.publish("gen-c")
-    with sqlite3.connect(store.database_path) as connection:
+    with store.connection() as connection:
         name = connection.execute("SELECT name FROM routes WHERE id = 'route-stable'").fetchone()[0]
     assert name == "Published Name"
 
 
-def test_expected_counts_include_non_current_membership_versions(tmp_path: Path):
-    store = GenerationStore(tmp_path / "routes.sqlite")
-    store.migrate()
+def test_expected_counts_include_non_current_membership_versions(store: GenerationStore):
     rows = sample_generation_rows(generation_suffix="a")
     rows["routes"].append(
         {
@@ -219,3 +197,17 @@ def test_expected_counts_include_non_current_membership_versions(tmp_path: Path)
     store.publish("gen-a")
     assert store.current_generation() == "gen-a"
     assert "version-legacy" in store.current_route_version_ids()
+
+
+def test_force_lease_reclaim_discards_orphan_staging(store: GenerationStore):
+    store.stage("gen-a", sample_generation_rows(generation_suffix="a"))
+    store.validate("gen-a")
+    store.publish("gen-a")
+    store.stage("orphan", sample_generation_rows(generation_suffix="b"))
+    store.claim_scrape_lease("worker-1", ttl_seconds=600)
+
+    store.claim_scrape_lease("worker-2", ttl_seconds=600, force=True)
+
+    assert store.scrape_lease_holder() == "worker-2"
+    assert store.current_generation() == "gen-a"
+    assert not store.has_generation("orphan")
