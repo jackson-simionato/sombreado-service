@@ -1,0 +1,16 @@
+[Unit]
+Description=Sombreado Service Generation Store backup (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=sombreado
+Group=sombreado
+WorkingDirectory=/opt/sombreado/current
+EnvironmentFile=/etc/sombreado/env
+Environment=PATH=/opt/sombreado/current/.venv/bin:/usr/bin
+ReadWritePaths=/var/lib/sombreado
+ExecStart=/opt/sombreado/current/.venv/bin/sombreado-scrape backup
+TimeoutStartSec=30min
+Nice=10
