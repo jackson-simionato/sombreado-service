@@ -1,6 +1,6 @@
 # Sombreado Service
 
-Read-only Python backend for onboard sun-side advisories from the Consorcio Fenix scraper database.
+Python backend for onboard sun-side advisories. Passenger reads use the service-owned SQLite Generation Store.
 
 ## Local Setup
 
@@ -36,7 +36,7 @@ Installable code lives under `src/sombreado/` with two process entry points:
 
 | Entry | How to run | Role |
 | --- | --- | --- |
-| API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (still reads Current Route Data from the Scraper Database via the Reader Database Role) |
+| API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (discovery, directions, geometry, advice from Generation Store `current`) |
 | Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Live Consórcio scrape; `publish-fixture` demos the store; `backup` / `restore` manage Generation Store Backup |
 
 SQLite Generation Store schema is versioned with Alembic under `migrations/`. Migrations apply automatically on deploy/startup:
@@ -82,37 +82,15 @@ browser origins with a JSON list:
 CORS_ORIGINS='["https://app.example.com"]'
 ```
 
-## Database Access
+## Datastore
 
-`sombreado-service` consumes the scraper-owned PostGIS schema as a separate read-only database user. Do not use the scraper ingestion or migration owner role for this service.
-
-Example role setup:
-
-```sql
-CREATE ROLE sombreado_service_reader LOGIN PASSWORD 'change-me';
-
-GRANT CONNECT ON DATABASE consorcio_fenix TO sombreado_service_reader;
-GRANT USAGE ON SCHEMA public TO sombreado_service_reader;
-
-GRANT SELECT ON TABLE
-  routes,
-  route_versions,
-  route_directions,
-  route_segments,
-  service_directions
-TO sombreado_service_reader;
-
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-GRANT SELECT ON TABLES TO sombreado_service_reader;
-```
-
-The service `DATABASE_URL` should use that role:
+Passenger API reads use the Generation Store SQLite file:
 
 ```bash
-DATABASE_URL=postgresql+asyncpg://sombreado_service_reader:change-me@localhost:5432/consorcio_fenix
+SQLITE_DATABASE_PATH=data/sombreado.sqlite
 ```
 
-Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or DDL privileges to the service role.
+Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. The API runtime path does not use PostGIS or a reader database role.
 
 ## Public Endpoints
 

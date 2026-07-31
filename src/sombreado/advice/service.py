@@ -1,3 +1,6 @@
+from typing import Protocol
+from uuid import UUID
+
 from sombreado.advice.exposure import (
     recommended_seat_area,
     summarize_advice_horizon,
@@ -22,11 +25,28 @@ from sombreado.domain.schemas import (
     RouteSegment,
     SegmentForAdvice,
 )
-from sombreado.route_reads.service import RouteReadService
+
+
+class RouteSegmentSource(Protocol):
+    async def load_current_route_version_id(self, route_id: UUID) -> UUID | None: ...
+
+    async def route_direction_belongs_to_version(
+        self,
+        *,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> bool: ...
+
+    async def load_current_route_segments(
+        self,
+        *,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> list[RouteSegment]: ...
 
 
 class AdviceService:
-    def __init__(self, *, route_service: RouteReadService, settings: Settings):
+    def __init__(self, *, route_service: RouteSegmentSource, settings: Settings):
         self._route_service = route_service
         self._settings = settings
 

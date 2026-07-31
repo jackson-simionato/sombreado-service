@@ -6,13 +6,11 @@ from sombreado.config import Settings, get_api_settings, get_cli_settings, get_s
 from sombreado.logging import configure_logging, get_logger
 
 
-def test_settings_defaults_use_read_only_advisory_values():
+def test_settings_defaults_use_passenger_api_values():
     settings = Settings(_env_file=None)
 
-    assert (
-        str(settings.database_url)
-        == "postgresql+asyncpg://sombreado_service_reader:sombreado@localhost:5432/consorcio_fenix"
-    )
+    assert settings.database_url == ""
+    assert settings.sqlite_database_path.as_posix() == "data/sombreado.sqlite"
     assert settings.nearby_radius_meters == 100
     assert settings.nearby_limit == 10
     assert settings.cors_origins == ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]

@@ -1,4 +1,4 @@
-"""Current-generation Route Search, Nearby Route Candidates, and Direction Choices."""
+"""Current-generation Route Discovery, Direction Choices, and Route Geometry reads."""
 
 from __future__ import annotations
 
@@ -122,6 +122,37 @@ _DEPARTURE_LABELS_SQL = """
         service_directions.sequence ASC
 """
 
+_DIRECTION_MEMBERSHIP_SQL = """
+    SELECT 1
+    FROM route_directions
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_directions.route_version_id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE route_directions.route_version_id = ?
+      AND route_directions.id = ?
+"""
+
+_SEGMENTS_SQL = """
+    SELECT
+        route_segments.public_id,
+        route_segments.sequence,
+        route_segments.geometry,
+        route_segments.bearing_degrees,
+        route_segments.distance_meters,
+        route_segments.cumulative_distance_meters
+    FROM route_segments
+    JOIN dataset_route_versions
+        ON dataset_route_versions.route_version_id = route_segments.route_version_id
+    JOIN dataset_pointers
+        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
+        AND dataset_pointers.role = 'current'
+    WHERE route_segments.route_version_id = ?
+      AND route_segments.route_direction_id = ?
+    ORDER BY route_segments.sequence ASC
+"""
+
 
 @dataclass(frozen=True)
 class RouteCandidateRow:
@@ -140,6 +171,16 @@ class DirectionChoiceRow:
     name: str
     direction_kind: str | None
     departure_labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RouteSegmentRow:
+    public_id: str
+    sequence: int
+    geometry: str
+    bearing_degrees: float
+    distance_meters: float
+    cumulative_distance_meters: float
 
 
 @dataclass(frozen=True)
@@ -306,6 +347,44 @@ def load_direction_choices(
     kind_order = {"ida": 0, "volta": 1, None: 2}
     rows.sort(key=lambda direction: (kind_order.get(direction.direction_kind, 2), direction.sequence))
     return tuple(rows)
+
+
+def route_direction_belongs_to_version(
+    connection: sqlite3.Connection,
+    *,
+    route_version_id: str,
+    route_direction_id: str,
+) -> bool:
+    """Return whether the direction belongs to the current-generation route version."""
+    row = connection.execute(
+        _DIRECTION_MEMBERSHIP_SQL,
+        (route_version_id, route_direction_id),
+    ).fetchone()
+    return row is not None
+
+
+def load_current_route_segments(
+    connection: sqlite3.Connection,
+    *,
+    route_version_id: str,
+    route_direction_id: str,
+) -> tuple[RouteSegmentRow, ...]:
+    """Return ordered current-generation route segments for one direction choice."""
+    rows = connection.execute(
+        _SEGMENTS_SQL,
+        (route_version_id, route_direction_id),
+    ).fetchall()
+    return tuple(
+        RouteSegmentRow(
+            public_id=str(row[0]),
+            sequence=int(row[1]),
+            geometry=str(row[2]),
+            bearing_degrees=float(row[3]),
+            distance_meters=float(row[4]),
+            cumulative_distance_meters=float(row[5]),
+        )
+        for row in rows
+    )
 
 
 def _direction_hints_by_version(

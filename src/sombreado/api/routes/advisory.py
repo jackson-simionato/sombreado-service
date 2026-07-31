@@ -1,25 +1,24 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from sombreado.advice.service import AdviceService
-from sombreado.api.deps import get_session, get_settings_dependency
+from sombreado.api.deps import get_current_route_service, get_settings_dependency
 from sombreado.api.errors import PublicApiError, parse_public_uuid
 from sombreado.api.mapping import to_advice_response
 from sombreado.api.schemas import AdviceRequest, AdviceResponse
 from sombreado.config import Settings
 from sombreado.domain.schemas import AdviceComputationRequest, AdviceLocation, AdviceMode
-from sombreado.route_reads.service import RouteReadService
+from sombreado.route_reads.current import CurrentRouteReadService
 
 router = APIRouter(prefix="/v1", tags=["advisory"])
 
 
 async def get_advisory_service(
-    session: Annotated[AsyncSession, Depends(get_session)],
+    route_service: Annotated[CurrentRouteReadService, Depends(get_current_route_service)],
     settings: Annotated[Settings, Depends(get_settings_dependency)],
 ) -> AdviceService:
-    return AdviceService(route_service=RouteReadService(session), settings=settings)
+    return AdviceService(route_service=route_service, settings=settings)
 
 
 @router.post("/advice", response_model=AdviceResponse, response_model_exclude_none=True)

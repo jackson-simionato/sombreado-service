@@ -1,5 +1,7 @@
 import math
 
+from sombreado.domain.schemas import LatLngPoint, RouteSegment
+
 EARTH_RADIUS_METERS = 6_371_000
 
 
@@ -27,3 +29,15 @@ def parse_linestring_wkt(value: str) -> list[tuple[float, float]]:
 def midpoint(coordinates: list[tuple[float, float]]) -> tuple[float, float]:
     start, end = coordinates[0], coordinates[-1]
     return ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+
+
+def flatten_route_polyline(segments: list[RouteSegment]) -> list[LatLngPoint]:
+    """Collapse ordered segment coordinates into a passenger polyline (lat/lng)."""
+    polyline: list[LatLngPoint] = []
+    for segment in segments:
+        for lng, lat in segment.coordinates:
+            point = LatLngPoint(lat=lat, lng=lng)
+            if polyline and polyline[-1] == point:
+                continue
+            polyline.append(point)
+    return polyline

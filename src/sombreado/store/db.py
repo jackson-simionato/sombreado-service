@@ -16,7 +16,13 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
-        _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+        database_url = get_settings().database_url.strip()
+        if not database_url:
+            raise ValueError(
+                "DATABASE_URL is required only for legacy PostGIS RouteReadService callers; "
+                "passenger API uses SQLITE_DATABASE_PATH"
+            )
+        _engine = create_async_engine(database_url, pool_pre_ping=True)
     return _engine
 
 

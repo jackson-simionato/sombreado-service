@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from sombreado.store.object_storage import (
@@ -15,7 +15,9 @@ from sombreado.store.object_storage import (
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    database_url: str = "postgresql+asyncpg://sombreado_service_reader:sombreado@localhost:5432/consorcio_fenix"
+    # Legacy PostGIS URL for optional RouteReadService / store.db callers only.
+    # Passenger API runtime uses sqlite_database_path and does not require this.
+    database_url: str = ""
     sqlite_database_path: Path = Path("data/sombreado.sqlite")
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
@@ -41,15 +43,10 @@ class Settings(BaseSettings):
     backup_retain: int = 7
     backup_key_prefix: str = "sombreado-routes"
 
-    @field_validator("database_url")
-    @classmethod
-    def database_url_must_be_non_empty(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("DATABASE_URL must be non-empty")
-        return value
-
     def require_api(self) -> "Settings":
         """Validate the settings subset required by the API process."""
+        if not str(self.sqlite_database_path).strip():
+            raise ValueError("SQLITE_DATABASE_PATH must be non-empty for the API")
         if not self.cors_origins:
             raise ValueError("CORS_ORIGINS must include at least one origin for the API")
         if self.route_candidate_nearby_limit < 1 or self.route_candidate_search_limit < 1:

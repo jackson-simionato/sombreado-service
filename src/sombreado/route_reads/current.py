@@ -1,4 +1,4 @@
-"""Passenger Route Discovery and Direction Choices from the Generation Store current pointer."""
+"""Passenger Route Discovery, Direction Choices, Geometry, and Advice reads from current."""
 
 from __future__ import annotations
 
@@ -8,12 +8,15 @@ from collections.abc import Callable
 from typing import TypeVar
 from uuid import UUID
 
-from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirectionKind
+from sombreado.domain.geometry import parse_linestring_wkt
+from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirectionKind, RouteSegment
 from sombreado.store.discovery import (
     RouteCandidateRow,
     find_nearby_route_candidates,
+    load_current_route_segments,
     load_current_route_version_id,
     load_direction_choices,
+    route_direction_belongs_to_version,
     search_route_candidates,
 )
 from sombreado.store.generation import GenerationStore
@@ -22,7 +25,7 @@ _T = TypeVar("_T")
 
 
 class CurrentRouteReadService:
-    """Read Route Candidates and Direction Choices from SQLite `current` only.
+    """Read passenger route data from SQLite `current` only.
 
     Sync SQLite work runs in a worker thread via ``asyncio.to_thread`` so the
     FastAPI event loop is not blocked by connection open / query / close.
@@ -69,6 +72,45 @@ class CurrentRouteReadService:
                 name=row.name,
                 direction_kind=_to_direction_kind(row.direction_kind),
                 departure_labels=list(row.departure_labels),
+            )
+            for row in rows
+        ]
+
+    async def route_direction_belongs_to_version(
+        self,
+        *,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> bool:
+        return await self._run_sqlite(
+            lambda connection: route_direction_belongs_to_version(
+                connection,
+                route_version_id=str(route_version_id),
+                route_direction_id=str(route_direction_id),
+            )
+        )
+
+    async def load_current_route_segments(
+        self,
+        *,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> list[RouteSegment]:
+        rows = await self._run_sqlite(
+            lambda connection: load_current_route_segments(
+                connection,
+                route_version_id=str(route_version_id),
+                route_direction_id=str(route_direction_id),
+            )
+        )
+        return [
+            RouteSegment(
+                id=UUID(row.public_id),
+                sequence=row.sequence,
+                coordinates=parse_linestring_wkt(row.geometry),
+                bearing_degrees=row.bearing_degrees,
+                distance_meters=row.distance_meters,
+                cumulative_distance_meters=row.cumulative_distance_meters,
             )
             for row in rows
         ]
