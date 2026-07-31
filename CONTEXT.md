@@ -1,11 +1,11 @@
 # Sombreado Service
 
-This context describes the backend that serves onboard sun-side guidance. Today the passenger API still reads scraper-owned route data; the codebase is reshaping toward dual entry points (API + scrape CLI) that will later own ingestion.
+This context describes the backend that serves onboard sun-side guidance. **Route Discovery** and **Direction Choices** already read the **Generation Store**; Route Geometry and Advice still use scraper-owned route data until that cutover slice.
 
 ## Language
 
 **Sombreado Service**:
-The installable backend package with two process entry points: the passenger-facing browser API and the scrape CLI. Until cutover, the API still computes Advice from scraper-owned **Current Route Data**.
+The installable backend package with two process entry points: the passenger-facing browser API and the scrape CLI. **Route Discovery** and **Direction Choices** read **Current Route Data** from the **Generation Store** `current` pointer; Advice and Route Geometry still use the **Scraper Database** until that cutover slice.
 _Avoid_: Naming the whole product only as “the scraper”; calling the passenger API an “ingestion service”
 
 **Scrape CLI**:
@@ -13,7 +13,7 @@ The separate OS-process entry point that fetches Consórcio Fênix data, validat
 _Avoid_: In-process scrape inside API requests, scraper repository runtime
 
 **Generation Store**:
-The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Not yet the passenger API read path.
+The service-owned SQLite WAL datastore with generation-keyed route rows, R*Tree coarse nearby filtering, and revised application geodesic exact distance. Passenger **Route Discovery** and **Direction Choices** read only through the `current` pointer; Route Geometry and Advice still use the Scraper Database until that cutover slice.
 _Avoid_: Scraper Database, app database, SpatiaLite
 
 **Generation Store Backup**:
@@ -49,7 +49,7 @@ A secret consumed by the running Sombreado Service inside Render.
 _Avoid_: Pipeline secret, CI variable
 
 **Current Route Data**:
-Passenger-usable route data from the scraper's current route and route version records.
+Passenger-usable route data addressed by the **Generation Store** `current` pointer for **Route Discovery** and **Direction Choices**, and still by scraper current route/version records for Route Geometry and Advice until that cutover slice.
 _Avoid_: Historical route data, archived route versions
 
 **Route Discovery**:
@@ -123,8 +123,8 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 ## Relationships
 
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
-- Until cutover, the API consumes the **Scraper Database** through the **Reader Database Role**.
-- The **Scrape CLI** owns live Consórcio fetch, migrate, and publish against the **Generation Store**; passenger API reads do not use it yet.
+- **Route Discovery** and **Direction Choices** read the **Generation Store** `current` pointer; Route Geometry and Advice still consume the **Scraper Database** through the **Reader Database Role**.
+- The **Scrape CLI** owns live Consórcio fetch, migrate, and publish against the **Generation Store**.
 - A **Generation Store Backup** job is independent of scrape publish; failure alerts without blocking publish or API availability.
 - Aside-and-restore installs the newest integrity-checked **Generation Store Backup** object after moving a bad live file aside; a fresh scrape is used only when no usable backup exists.
 - A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
@@ -198,7 +198,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 ## Flagged ambiguities
 
-- The **Generation Store** exists for fixture publish and upcoming scrape ownership, but passenger reads still use the **Reader Database Role** / **Scraper Database** until SQLite cutover.
+- The **Generation Store** is the passenger read path for **Route Discovery** and **Direction Choices**; Route Geometry and Advice still use the **Reader Database Role** / **Scraper Database** until that cutover slice.
 - "database user" means the **Reader Database Role** for this service's API, not the scraper's ingestion or migration role.
 - "deploy" means GitHub Actions triggering the **Render Deployment** after CI passes on `main`, not Render auto-deploying before CI.
 - `DATABASE_URL` is a **Runtime Secret**, not a **Pipeline Secret**.

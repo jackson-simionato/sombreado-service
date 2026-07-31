@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 from sombreado.api.main import create_app
 from sombreado.api.routes.advisory import get_advisory_service
-from sombreado.api.routes.nearby import get_route_service
+from sombreado.api.routes.nearby import get_discovery_service, get_route_service
 from sombreado.api.routes.route_candidates import get_route_service as get_route_candidate_service
 from sombreado.api.schemas import DirectionChoice, RouteCandidate
 from sombreado.domain.schemas import AdviceMode, RouteSegment
@@ -184,7 +184,7 @@ async def test_legacy_route_summary_endpoints_are_removed(path):
 @pytest.mark.asyncio
 async def test_direction_choices_default_to_latest_route_version():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/v1/routes/00000000-0000-0000-0000-000000000001/directions")
@@ -197,7 +197,7 @@ async def test_direction_choices_default_to_latest_route_version():
 @pytest.mark.asyncio
 async def test_direction_choices_validate_route_version_and_return_camel_case_response():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -230,7 +230,7 @@ async def test_direction_choices_validate_route_version_and_return_camel_case_re
 @pytest.mark.asyncio
 async def test_direction_choices_return_empty_list_for_current_route_without_directions():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -252,7 +252,7 @@ async def test_direction_choices_return_empty_list_for_current_route_without_dir
 )
 async def test_direction_choices_return_route_not_found_error(params):
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -268,7 +268,7 @@ async def test_direction_choices_return_route_not_found_error(params):
 @pytest.mark.asyncio
 async def test_direction_choices_return_stale_version_error():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -292,7 +292,7 @@ async def test_direction_choices_return_stale_version_error():
 )
 async def test_direction_choices_validation_errors_use_standard_envelope(route_id, params):
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/v1/routes/{route_id}/directions", params=params)

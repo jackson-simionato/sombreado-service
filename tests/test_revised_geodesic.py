@@ -120,3 +120,18 @@ def test_order_nearby_rows_does_not_merge_across_barely_over_2m_gap():
 
 def test_order_nearby_rows_empty():
     assert order_nearby_rows([]) == ()
+
+
+def test_order_nearby_items_keeps_distinct_identities_with_same_code():
+    from sombreado.store.geodesic import order_nearby_items
+
+    rows = [
+        ("route-b", "version-b", "330", "Route B", 10.0),
+        ("route-a", "version-a", "330", "Route A", 10.5),
+    ]
+    result = order_nearby_items(
+        rows,
+        distance_of=lambda row: row[4],
+        sort_key=lambda row: (row[2], row[3], row[0]),
+    )
+    assert [row[0] for row in result] == ["route-a", "route-b"]

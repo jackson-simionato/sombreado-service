@@ -1,7 +1,7 @@
 """Durable datastore access.
 
-Passenger API reads still use the PostGIS reader role until cutover.
-The SQLite generation store is owned here for fixture publish and upcoming scrape.
+Route Discovery and Direction Choices read the SQLite Generation Store `current`
+pointer. Route Geometry and Advice still use the PostGIS reader role until #37.
 """
 
 from sombreado.store.generation import GenerationStore, ScrapeLeaseHeldError

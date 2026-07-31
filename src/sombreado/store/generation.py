@@ -20,12 +20,11 @@ from sombreado.store.generation_writes import (
     validate_export_shape,
     validate_generation,
 )
-from sombreado.store.nearby import NearbyRoute, find_nearby_routes
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ALEMBIC_INI = _REPO_ROOT / "alembic.ini"
 
-__all__ = ["CanonicalRows", "GenerationStore", "NearbyRoute", "ScrapeLeaseHeldError"]
+__all__ = ["CanonicalRows", "GenerationStore", "ScrapeLeaseHeldError"]
 
 
 class ScrapeLeaseHeldError(RuntimeError):
@@ -33,7 +32,7 @@ class ScrapeLeaseHeldError(RuntimeError):
 
 
 class GenerationStore:
-    """Own migrate, scrape lease, generation lifecycle, and nearby reads."""
+    """Own migrate, scrape lease, generation lifecycle, and SQLite connections."""
 
     def __init__(self, database_path: Path) -> None:
         self.database_path = Path(database_path)
@@ -60,7 +59,7 @@ class GenerationStore:
         """
         now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl_seconds)
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 row = connection.execute(
@@ -91,7 +90,7 @@ class GenerationStore:
 
     def release_scrape_lease(self, holder_id: str) -> None:
         """Release the scrape lease when held by the given holder."""
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
@@ -104,14 +103,14 @@ class GenerationStore:
                 raise
 
     def scrape_lease_holder(self) -> str | None:
-        with self._connect() as connection:
+        with self.connection() as connection:
             row = connection.execute("SELECT holder_id FROM scrape_lease WHERE singleton = 1").fetchone()
             return None if row is None else str(row[0])
 
     def stage(self, generation_id: str, rows: CanonicalRows) -> None:
         """Insert one canonical export without changing current/previous pointers."""
         validate_export_shape(rows)
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
@@ -134,7 +133,7 @@ class GenerationStore:
         data never lingers for a later accidental publish.
         """
         try:
-            with self._connect() as connection:
+            with self.connection() as connection:
                 try:
                     connection.execute("BEGIN IMMEDIATE")
                     validate_generation(connection, generation_id)
@@ -158,7 +157,7 @@ class GenerationStore:
 
     def publish(self, generation_id: str) -> None:
         """Atomically point current at a validated generation; demote old current to previous."""
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 generation = connection.execute(
@@ -217,7 +216,7 @@ class GenerationStore:
 
     def discard_staging(self, generation_id: str) -> None:
         """Delete an incomplete or failed staging generation without touching current."""
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 status = connection.execute(
@@ -244,15 +243,15 @@ class GenerationStore:
                 raise
 
     def current_generation(self) -> str | None:
-        with self._connect() as connection:
+        with self.connection() as connection:
             return pointer(connection, "current")
 
     def previous_generation(self) -> str | None:
-        with self._connect() as connection:
+        with self.connection() as connection:
             return pointer(connection, "previous")
 
     def has_generation(self, generation_id: str) -> bool:
-        with self._connect() as connection:
+        with self.connection() as connection:
             return (
                 connection.execute(
                     "SELECT EXISTS(SELECT 1 FROM dataset_generations WHERE id = ?)",
@@ -262,7 +261,7 @@ class GenerationStore:
             )
 
     def current_route_version_ids(self) -> tuple[str, ...]:
-        with self._connect() as connection:
+        with self.connection() as connection:
             return tuple(
                 str(row[0])
                 for row in connection.execute(
@@ -275,16 +274,6 @@ class GenerationStore:
                     ORDER BY member.route_version_id
                     """
                 )
-            )
-
-    def nearby(self, *, lat: float, lng: float, radius_meters: float) -> tuple[NearbyRoute, ...]:
-        """Return current-generation nearby routes using R*Tree + revised geodesic."""
-        with self._connect() as connection:
-            return find_nearby_routes(
-                connection,
-                lat=lat,
-                lng=lng,
-                radius_meters=radius_meters,
             )
 
     def record_scrape_run(
@@ -300,7 +289,7 @@ class GenerationStore:
         error_summary: str | None,
     ) -> None:
         """Persist minimal scrape-run ops metadata."""
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
@@ -329,7 +318,7 @@ class GenerationStore:
     def prune_scrape_runs(self, *, retention_days: int = 30, keep_last: int = 30) -> None:
         """Drop scrape-run rows outside the short retention horizon."""
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
-        with self._connect() as connection:
+        with self.connection() as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
@@ -356,7 +345,8 @@ class GenerationStore:
                 raise
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
+    def connection(self) -> Iterator[sqlite3.Connection]:
+        """Open a WAL SQLite connection with foreign keys enabled."""
         connection = sqlite3.connect(self.database_path, timeout=30)
         try:
             connection.execute("PRAGMA foreign_keys = ON")
