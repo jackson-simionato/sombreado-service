@@ -13,6 +13,7 @@ from alembic.config import Config
 
 from sombreado.store.generation_writes import (
     CanonicalRows,
+    apply_generation_routes,
     delete_generation,
     delete_orphan_staging,
     insert_staged_rows,
@@ -180,6 +181,8 @@ class GenerationStore:
                     delete_generation(connection, str(previous[0]))
 
                 delete_orphan_staging(connection, keep_generation_id=generation_id)
+                # Shared routes stay frozen during stage; flip attributes with the pointer.
+                apply_generation_routes(connection, generation_id)
 
                 if current is not None and current[0] != generation_id:
                     connection.execute(

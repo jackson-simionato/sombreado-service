@@ -29,6 +29,7 @@ def insert_staged_rows(
     rows: CanonicalRows,
 ) -> None:
     insert_routes(connection, rows["routes"])
+    insert_generation_routes(connection, generation_id, rows["routes"])
     insert_route_versions(connection, rows["route_versions"])
     insert_route_directions(connection, rows["route_directions"])
     insert_service_directions(connection, rows["service_directions"])
@@ -38,19 +39,13 @@ def insert_staged_rows(
 
 
 def insert_routes(connection: sqlite3.Connection, rows: Sequence[Mapping[str, object]]) -> None:
+    """Insert missing shared route rows; never mutate passenger-visible attributes here."""
     connection.executemany(
         """
         INSERT INTO routes(
             id, code, name, slug, category, fare_region, last_changed, is_current
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            code = excluded.code,
-            name = excluded.name,
-            slug = excluded.slug,
-            category = excluded.category,
-            fare_region = excluded.fare_region,
-            last_changed = excluded.last_changed,
-            is_current = excluded.is_current
+        ON CONFLICT(id) DO NOTHING
         """,
         [
             (
@@ -65,6 +60,57 @@ def insert_routes(connection: sqlite3.Connection, rows: Sequence[Mapping[str, ob
             )
             for row in rows
         ],
+    )
+
+
+def insert_generation_routes(
+    connection: sqlite3.Connection,
+    generation_id: str,
+    rows: Sequence[Mapping[str, object]],
+) -> None:
+    """Snapshot route attributes for this generation; applied to routes only at publish."""
+    connection.executemany(
+        """
+        INSERT INTO generation_routes(
+            generation_id, route_id, code, name, slug, category, fare_region,
+            last_changed, is_current
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                generation_id,
+                row["id"],
+                row["code"],
+                row["name"],
+                row["slug"],
+                row["category"],
+                row["fare_region"],
+                row["last_changed"],
+                row["is_current"],
+            )
+            for row in rows
+        ],
+    )
+
+
+def apply_generation_routes(connection: sqlite3.Connection, generation_id: str) -> None:
+    """Copy generation-scoped route attributes onto shared routes at publish time."""
+    connection.execute(
+        """
+        UPDATE routes
+        SET
+            code = generation_routes.code,
+            name = generation_routes.name,
+            slug = generation_routes.slug,
+            category = generation_routes.category,
+            fare_region = generation_routes.fare_region,
+            last_changed = generation_routes.last_changed,
+            is_current = generation_routes.is_current
+        FROM generation_routes
+        WHERE generation_routes.generation_id = ?
+            AND generation_routes.route_id = routes.id
+        """,
+        (generation_id,),
     )
 
 
@@ -185,7 +231,8 @@ def insert_expected_counts(
     generation_id: str,
     rows: CanonicalRows,
 ) -> None:
-    current_versions = {str(row["id"]) for row in rows["route_versions"] if int(row["is_current"]) == 1}
+    # Count the same version set membership inserts — not only is_current == 1.
+    membership_versions = {str(row["id"]) for row in rows["route_versions"]}
     connection.execute(
         """
         INSERT INTO dataset_generation_counts(
@@ -194,10 +241,10 @@ def insert_expected_counts(
         """,
         (
             generation_id,
-            len(current_versions),
-            sum(str(row["route_version_id"]) in current_versions for row in rows["route_directions"]),
-            sum(str(row["route_version_id"]) in current_versions for row in rows["service_directions"]),
-            sum(str(row["route_version_id"]) in current_versions for row in rows["route_segments"]),
+            len(membership_versions),
+            sum(str(row["route_version_id"]) in membership_versions for row in rows["route_directions"]),
+            sum(str(row["route_version_id"]) in membership_versions for row in rows["service_directions"]),
+            sum(str(row["route_version_id"]) in membership_versions for row in rows["route_segments"]),
         ),
     )
 
@@ -339,6 +386,7 @@ def delete_generation(connection: sqlite3.Connection, generation_id: str) -> Non
     ]
     connection.execute("DELETE FROM dataset_pointers WHERE generation_id = ?", (generation_id,))
     connection.execute("DELETE FROM dataset_generation_counts WHERE generation_id = ?", (generation_id,))
+    connection.execute("DELETE FROM generation_routes WHERE generation_id = ?", (generation_id,))
     connection.execute("DELETE FROM dataset_route_versions WHERE generation_id = ?", (generation_id,))
     connection.execute("DELETE FROM dataset_generations WHERE id = ?", (generation_id,))
 

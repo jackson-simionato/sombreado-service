@@ -30,7 +30,7 @@ def test_api_startup_applies_migrations(sqlite_path: Path):
 
     with sqlite3.connect(sqlite_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert version == ("20260730_0002",)
+    assert version == ("20260731_0003",)
 
 
 def test_cli_startup_applies_migrations(sqlite_path: Path):
@@ -42,8 +42,9 @@ def test_cli_startup_applies_migrations(sqlite_path: Path):
     with sqlite3.connect(sqlite_path) as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
-    assert version == ("20260730_0002",)
+    assert version == ("20260731_0003",)
     assert "scrape_runs" in tables
+    assert "generation_routes" in tables
 
 
 def test_docker_entrypoint_runs_migrate_then_exec():
