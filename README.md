@@ -92,6 +92,37 @@ SQLITE_DATABASE_PATH=data/sombreado.sqlite
 
 Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. The API runtime path does not use PostGIS or a reader database role.
 
+## Production (Oracle VM)
+
+Production runs on one Oracle Always Free VM. Layout:
+
+| Path | Role |
+| --- | --- |
+| `/opt/sombreado/releases/<sha>` | Immutable-ish release trees |
+| `/opt/sombreado/current` | Symlink to the active release |
+| `/var/lib/sombreado/` | Durable Generation Store + backup work dirs (**never** deleted by deploy) |
+| `/etc/sombreado/env` | Runtime secrets (`EnvironmentFile`) |
+
+systemd units (under `deploy/systemd/`):
+
+- `sombreado-api.service` — passenger API on `127.0.0.1:8000`, start on boot
+- `sombreado-scrape.timer` → oneshot `sombreado-scrape scrape` (daily; DB scrape lease for mutual exclusion)
+- `sombreado-backup.timer` → oneshot `sombreado-scrape backup`
+
+One-time host prep (as root):
+
+```bash
+sudo DEPLOY_USER=ubuntu ./deploy/bootstrap-vm.sh
+# edit /etc/sombreado/env (from deploy/env.example)
+# install uv on the host (must be on root PATH for deploy-release.sh)
+```
+
+`DEPLOY_USER` is the GitHub Actions SSH login: bootstrap adds it to group `sombreado` (rsync into `/opt/sombreado/releases`) and installs a sudoers drop-in for `deploy-release.sh` only. On Oracle A1 (aarch64), confirm `uv sync --frozen --no-dev` resolves wheels before relying on deploys.
+
+After CI passes on `main`, GitHub Actions rsyncs the commit into `/opt/sombreado/releases/<sha>`, then runs `deploy/deploy-release.sh` (symlink flip + `systemctl restart sombreado-api`). Configure repository secrets `VM_HOST`, `VM_USER`, and `VM_SSH_PRIVATE_KEY` (optional `VM_PORT`). Deploy is skipped when those secrets are absent.
+
+Put a reverse proxy (Caddy/nginx + Let’s Encrypt) in front of `127.0.0.1:8000`. Browser URL cutover is a separate production step.
+
 ## Public Endpoints
 
 The browser contract uses camelCase JSON and UUID-shaped public identifiers at the
