@@ -75,4 +75,4 @@ Runner provisional verdict: `postgis-generation-store-credible`.
 
 Evidence snapshot: `prototype-evidence.json` on this branch.
 
-**HITL verdict:** _pending human confirmation — drive `make prototype-postgis-generation-store` / interactive mode, then record keep/reject for #58._
+**HITL verdict: `postgis-generation-store-credible`.** Local PostGIS demonstrates reusable Generation Store publication semantics and PostGIS-only geography nearby. Enough confidence for [#58](https://github.com/jackson-simionato/sombreado-service/issues/58) to lock Neon Free Postgres/PostGIS (geography + `ST_DWithin` + GIST) as the production Generation Store model.
