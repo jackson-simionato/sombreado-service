@@ -142,6 +142,30 @@ class DirectionChoiceRow:
     departure_labels: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _NearbySegmentCandidate:
+    """Best approximate-distance segment kept per route during nearby filtering."""
+
+    route_id: str
+    route_version_id: str
+    route_code: str
+    route_name: str
+    approx_distance_meters: float
+    start_lat: float
+    start_lng: float
+    end_lat: float
+    end_lng: float
+
+
+@dataclass(frozen=True)
+class _RefinedNearbyRoute:
+    route_id: str
+    route_version_id: str
+    route_code: str
+    route_name: str
+    distance_meters: float
+
+
 def search_route_candidates(
     connection: sqlite3.Connection,
     *,
@@ -179,7 +203,7 @@ def find_nearby_route_candidates(
         _NEARBY_CANDIDATE_SQL,
         (max_lng, min_lng, max_lat, min_lat),
     )
-    by_route: dict[str, tuple[str, str, str, float, float, float, float, float]] = {}
+    by_route: dict[str, _NearbySegmentCandidate] = {}
     for row in candidates:
         approx_distance = approximate_point_to_segment_meters(
             lat,
@@ -191,52 +215,61 @@ def find_nearby_route_candidates(
         )
         route_id = str(row[0])
         current = by_route.get(route_id)
-        if current is None or approx_distance < current[3]:
-            by_route[route_id] = (
-                str(row[1]),
-                str(row[2]),
-                str(row[3]),
-                approx_distance,
-                float(row[4]),
-                float(row[5]),
-                float(row[6]),
-                float(row[7]),
+        if current is None or approx_distance < current.approx_distance_meters:
+            by_route[route_id] = _NearbySegmentCandidate(
+                route_id=route_id,
+                route_version_id=str(row[1]),
+                route_code=str(row[2]),
+                route_name=str(row[3]),
+                approx_distance_meters=approx_distance,
+                start_lat=float(row[4]),
+                start_lng=float(row[5]),
+                end_lat=float(row[6]),
+                end_lng=float(row[7]),
             )
 
-    refined: list[tuple[str, str, str, str, float]] = []
-    for route_id, (version_id, code, name, _approx, start_lat, start_lng, end_lat, end_lng) in by_route.items():
+    refined: list[_RefinedNearbyRoute] = []
+    for candidate in by_route.values():
         distance = point_to_segment_meters(
             lat,
             lng,
-            start_lat,
-            start_lng,
-            end_lat,
-            end_lng,
+            candidate.start_lat,
+            candidate.start_lng,
+            candidate.end_lat,
+            candidate.end_lng,
         )
         if distance <= radius_meters:
-            refined.append((route_id, version_id, code, name, distance))
+            refined.append(
+                _RefinedNearbyRoute(
+                    route_id=candidate.route_id,
+                    route_version_id=candidate.route_version_id,
+                    route_code=candidate.route_code,
+                    route_name=candidate.route_name,
+                    distance_meters=distance,
+                )
+            )
 
     # Preserve route_id through ordering so equal codes cannot collapse hits.
     ordered = list(
         order_nearby_items(
             refined,
-            distance_of=lambda row: row[4],
-            sort_key=lambda row: (row[2], row[3], row[0]),
+            distance_of=lambda row: row.distance_meters,
+            sort_key=lambda row: (row.route_code, row.route_name, row.route_id),
         )
     )[:limit]
 
-    version_ids = [version_id for _route_id, version_id, _code, _name, _distance in ordered]
+    version_ids = [row.route_version_id for row in ordered]
     hints_by_version = _direction_hints_by_version(connection, version_ids)
     return tuple(
         RouteCandidateRow(
-            route_id=route_id,
-            route_version_id=version_id,
-            route_code=code,
-            route_name=name,
-            direction_hints=hints_by_version.get(version_id, ()),
-            distance_meters=distance,
+            route_id=row.route_id,
+            route_version_id=row.route_version_id,
+            route_code=row.route_code,
+            route_name=row.route_name,
+            direction_hints=hints_by_version.get(row.route_version_id, ()),
+            distance_meters=row.distance_meters,
         )
-        for route_id, version_id, code, name, distance in ordered
+        for row in ordered
     )
 
 
