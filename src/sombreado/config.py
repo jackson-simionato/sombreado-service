@@ -15,8 +15,8 @@ from sombreado.store.object_storage import (
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # Neon/PostGIS Generation Store DSN (Runtime Secret on Render / local DATABASE_URL).
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/sombreado_test"
+    # Neon/PostGIS Generation Store DSN (Runtime Secret). Required for API/CLI via require_*.
+    database_url: str = ""
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )

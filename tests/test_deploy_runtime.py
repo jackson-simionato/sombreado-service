@@ -6,7 +6,10 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPO_ROOT / "deploy"
@@ -14,6 +17,12 @@ DEPLOY_SCRIPT = DEPLOY_DIR / "deploy-release.sh"
 ACTIVATOR_SCRIPT = DEPLOY_DIR / "sombreado-deploy-release"
 BOOTSTRAP_SCRIPT = DEPLOY_DIR / "bootstrap-vm.sh"
 SYSTEMD_DIR = DEPLOY_DIR / "systemd"
+
+# Deploy shell scripts use GNU coreutils (`mv -T`, `stat -c`); skip on macOS/BSD.
+requires_gnu_coreutils = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="Oracle deploy scripts require GNU mv/stat (Linux CI)",
+)
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -76,6 +85,7 @@ def test_deploy_scripts_exist_and_are_executable():
         assert os.access(path, os.X_OK)
 
 
+@requires_gnu_coreutils
 def test_deploy_flips_symlink_restarts_api_and_preserves_data_dir(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
@@ -157,6 +167,7 @@ def test_deploy_flips_symlink_restarts_api_and_preserves_data_dir(tmp_path: Path
     assert "restart sombreado-api.service" in systemctl_log
 
 
+@requires_gnu_coreutils
 def test_deploy_restores_previous_current_and_reprobes_health(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
@@ -241,6 +252,7 @@ esac
     assert log.read_text(encoding="utf-8").count("restart sombreado-api.service") >= 2
 
 
+@requires_gnu_coreutils
 def test_deploy_reports_when_previous_release_also_fails_health(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
@@ -291,6 +303,7 @@ def test_deploy_reports_when_previous_release_also_fails_health(tmp_path: Path):
     assert (root / "current").resolve() == previous_dir.resolve()
 
 
+@requires_gnu_coreutils
 def test_activator_rejects_invalid_sha_and_execs_root_owned_script(tmp_path: Path):
     lib = tmp_path / "lib"
     sbin_log = tmp_path / "deploy.log"
@@ -325,6 +338,7 @@ def test_activator_rejects_invalid_sha_and_execs_root_owned_script(tmp_path: Pat
     assert sbin_log.read_text(encoding="utf-8").strip() == "sha=abc1234"
 
 
+@requires_gnu_coreutils
 def test_activator_rejects_non_root_owned_deploy_script(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
@@ -345,6 +359,7 @@ def test_activator_rejects_non_root_owned_deploy_script(tmp_path: Path):
     assert "deploy script not root-owned" in result.stderr
 
 
+@requires_gnu_coreutils
 def test_bootstrap_installs_fixed_activator_units_and_safe_sudoers(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
@@ -405,6 +420,7 @@ def test_bootstrap_installs_fixed_activator_units_and_safe_sudoers(tmp_path: Pat
     assert env_file.read_text(encoding="utf-8") == "CUSTOM=1\n"
 
 
+@requires_gnu_coreutils
 def test_deploy_rejects_non_root_owned_unit_source_when_enforced(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
@@ -506,6 +522,7 @@ def test_ci_pins_known_hosts_and_uses_fixed_activator():
     assert "/opt/sombreado/releases/${RELEASE_SHA}/deploy/deploy-release.sh" not in workflow
 
 
+@requires_gnu_coreutils
 def test_deploy_rejects_symlink_release_directory(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
@@ -553,6 +570,7 @@ def test_deploy_rejects_symlink_release_directory(tmp_path: Path):
     assert "must not be a symlink" in result.stderr
 
 
+@requires_gnu_coreutils
 def test_deploy_rejects_release_path_escaping_releases_root(tmp_path: Path):
     root = tmp_path / "opt" / "sombreado"
     data_root = tmp_path / "var" / "lib" / "sombreado"
