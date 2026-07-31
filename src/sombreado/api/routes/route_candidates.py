@@ -1,24 +1,22 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from sombreado.api.deps import get_session, get_settings_dependency
+from sombreado.api.deps import get_current_route_service, get_settings_dependency
 from sombreado.api.mapping import to_route_candidates
 from sombreado.api.schemas import RouteCandidatesResponse
 from sombreado.config import Settings
-from sombreado.route_reads.service import RouteReadService
+from sombreado.route_reads.current import CurrentRouteReadService
 
 router = APIRouter(prefix="/v1/route-candidates", tags=["route-candidates"])
 
-
-async def get_route_service(session: Annotated[AsyncSession, Depends(get_session)]) -> RouteReadService:
-    return RouteReadService(session)
+# Re-export for tests that override the discovery dependency by this name.
+get_route_service = get_current_route_service
 
 
 @router.get("/search", response_model=RouteCandidatesResponse, response_model_exclude_none=True)
 async def search_route_candidates(
-    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+    route_service: Annotated[CurrentRouteReadService, Depends(get_current_route_service)],
     settings: Annotated[Settings, Depends(get_settings_dependency)],
     query: Annotated[str, Query(min_length=1, max_length=100)],
     limit: Annotated[int | None, Query(gt=0, le=100)] = None,
@@ -32,7 +30,7 @@ async def search_route_candidates(
 
 @router.get("/nearby", response_model=RouteCandidatesResponse, response_model_exclude_none=True)
 async def nearby_route_candidates(
-    route_service: Annotated[RouteReadService, Depends(get_route_service)],
+    route_service: Annotated[CurrentRouteReadService, Depends(get_current_route_service)],
     settings: Annotated[Settings, Depends(get_settings_dependency)],
     lat: Annotated[float, Query(ge=-90, le=90)],
     lng: Annotated[float, Query(ge=-180, le=180)],
