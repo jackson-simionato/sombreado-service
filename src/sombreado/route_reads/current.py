@@ -5,6 +5,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirectionKind
+from sombreado.store.discovery import (
+    find_nearby_route_candidates,
+    load_current_route_version_id,
+    load_direction_choices,
+    search_route_candidates,
+)
 from sombreado.store.generation import GenerationStore
 
 
@@ -15,7 +21,8 @@ class CurrentRouteReadService:
         self._store = store
 
     async def search_route_candidates(self, *, query: str, limit: int) -> list[RouteCandidate]:
-        rows = self._store.search_route_candidates(query=query, limit=limit)
+        with self._store.connection() as connection:
+            rows = search_route_candidates(connection, query=query, limit=limit)
         return [_to_route_candidate(row) for row in rows]
 
     async def find_nearby_route_candidates(
@@ -26,20 +33,24 @@ class CurrentRouteReadService:
         radius_meters: float,
         limit: int,
     ) -> list[RouteCandidate]:
-        rows = self._store.find_nearby_route_candidates(
-            lat=lat,
-            lng=lng,
-            radius_meters=radius_meters,
-            limit=limit,
-        )
+        with self._store.connection() as connection:
+            rows = find_nearby_route_candidates(
+                connection,
+                lat=lat,
+                lng=lng,
+                radius_meters=radius_meters,
+                limit=limit,
+            )
         return [_to_route_candidate(row) for row in rows]
 
     async def load_current_route_version_id(self, route_id: UUID) -> UUID | None:
-        version_id = self._store.current_route_version_id(str(route_id))
+        with self._store.connection() as connection:
+            version_id = load_current_route_version_id(connection, str(route_id))
         return None if version_id is None else UUID(version_id)
 
     async def load_direction_choices(self, *, route_version_id: UUID) -> list[DirectionChoice]:
-        rows = self._store.direction_choices(route_version_id=str(route_version_id))
+        with self._store.connection() as connection:
+            rows = load_direction_choices(connection, route_version_id=str(route_version_id))
         return [
             DirectionChoice(
                 route_direction_id=UUID(row.route_direction_id),
