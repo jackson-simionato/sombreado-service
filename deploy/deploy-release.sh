@@ -7,12 +7,12 @@
 #   /var/lib/sombreado/              # durable SQLite + backup work dirs (never deleted)
 #   /etc/sombreado/env               # runtime secrets (EnvironmentFile)
 #
-# Usage (on the VM, after rsync into releases/$RELEASE_SHA):
-#   RELEASE_SHA=<sha> ./deploy/deploy-release.sh
+# Production entry point (root-owned, via sudoers):
+#   sudo /usr/local/sbin/sombreado-deploy-release <sha>
 #
 # Overrides for tests / non-standard roots:
 #   SOMBREADO_ROOT SOMBREADO_DATA_ROOT SOMBREADO_UNIT_DIR SOMBREADO_ENV_FILE
-#   SYSTEMCTL UV KEEP_RELEASES
+#   SYSTEMCTL UV KEEP_RELEASES HEALTH_URL HEALTH_TIMEOUT_SECONDS CURL
 
 set -euo pipefail
 
@@ -22,7 +22,10 @@ SOMBREADO_UNIT_DIR="${SOMBREADO_UNIT_DIR:-/etc/systemd/system}"
 SOMBREADO_ENV_FILE="${SOMBREADO_ENV_FILE:-/etc/sombreado/env}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 UV="${UV:-uv}"
+CURL="${CURL:-curl}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health/live}"
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
 
 if [[ -z "${RELEASE_SHA:-}" ]]; then
   echo "RELEASE_SHA is required" >&2
@@ -88,6 +91,16 @@ echo "reloading systemd and enabling runtime units"
 "${SYSTEMCTL}" enable --now sombreado-scrape.timer
 "${SYSTEMCTL}" enable --now sombreado-backup.timer
 "${SYSTEMCTL}" restart sombreado-api.service
+
+echo "waiting for API health at ${HEALTH_URL}"
+deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+until "${CURL}" -fsS --max-time 2 "${HEALTH_URL}" >/dev/null 2>&1; do
+  if (( SECONDS >= deadline )); then
+    echo "API health check failed after ${HEALTH_TIMEOUT_SECONDS}s: ${HEALTH_URL}" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 # Prune old releases; never touch SOMBREADO_DATA_ROOT.
 if [[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] && [[ "${KEEP_RELEASES}" -gt 0 ]]; then
