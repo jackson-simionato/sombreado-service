@@ -78,90 +78,39 @@ jobs:
         run: docker build -t sombreado-service:${{ github.sha }} .
 
   deploy:
-    name: Deploy release to Oracle VM
+    name: Trigger Render Deploy Hook
     runs-on: ubuntu-latest
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     concurrency:
-      group: sombreado-vm-deploy
+      group: sombreado-render-deploy
       cancel-in-progress: false
     env:
-      VM_HOST: ${{ secrets.VM_HOST }}
-      VM_USER: ${{ secrets.VM_USER }}
-      VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-      VM_SSH_KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
-      VM_PORT: ${{ secrets.VM_PORT }}
+      # Pipeline Secret: Render Deploy Hook URL (not a Runtime Secret on the web service).
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       ALLOW_SKIP_DEPLOY: ${{ secrets.ALLOW_SKIP_DEPLOY }}
       RELEASE_SHA: ${{ github.sha }}
 
     steps:
-      - name: Require VM deploy secrets on main
-        if: >-
-          env.VM_HOST == '' || env.VM_USER == '' || env.VM_SSH_PRIVATE_KEY == '' ||
-          env.VM_SSH_KNOWN_HOSTS == ''
+      - name: Require Render Deploy Hook Pipeline Secret on main
+        if: env.RENDER_DEPLOY_HOOK_URL == ''
         run: |
           if [ "${ALLOW_SKIP_DEPLOY}" = "1" ]; then
-            echo "ALLOW_SKIP_DEPLOY=1; skipping VM deployment."
+            echo "ALLOW_SKIP_DEPLOY=1; skipping Render Deploy Hook."
             exit 0
           fi
-          echo "VM_HOST / VM_USER / VM_SSH_PRIVATE_KEY / VM_SSH_KNOWN_HOSTS are required on main."
-          echo "Set those secrets, or set ALLOW_SKIP_DEPLOY=1 to opt out explicitly."
+          echo "RENDER_DEPLOY_HOOK_URL repository secret is required on main."
+          echo "Set it as a Pipeline Secret (Actions), or set ALLOW_SKIP_DEPLOY=1 to opt out explicitly."
           exit 1
 
-      - name: Check out repository
-        if: >-
-          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
-          env.VM_SSH_KNOWN_HOSTS != ''
-        uses: actions/checkout@v4
-
-      - name: Configure SSH
-        if: >-
-          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
-          env.VM_SSH_KNOWN_HOSTS != ''
+      - name: Call Render Deploy Hook
+        if: env.RENDER_DEPLOY_HOOK_URL != ''
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$VM_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$VM_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Sync release tree to VM
-        if: >-
-          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
-          env.VM_SSH_KNOWN_HOSTS != ''
-        env:
-          SSH_OPTS: >-
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile=~/.ssh/known_hosts
-            -o BatchMode=yes
-            -o ConnectTimeout=10
-            -o IdentitiesOnly=yes
-        run: |
-          REMOTE_RELEASE="/opt/sombreado/releases/${RELEASE_SHA}"
-          ssh ${SSH_OPTS} -p "${VM_PORT:-22}" "${VM_USER}@${VM_HOST}" "mkdir -p '${REMOTE_RELEASE}'"
-          rsync -az --delete \
-            -e "ssh ${SSH_OPTS} -p ${VM_PORT:-22}" \
-            --exclude '.git/' \
-            --exclude '.venv/' \
-            --exclude '.env' \
-            --exclude 'data/' \
-            --exclude '__pycache__/' \
-            --exclude '.pytest_cache/' \
-            --exclude '.ruff_cache/' \
-            ./ "${VM_USER}@${VM_HOST}:${REMOTE_RELEASE}/"
-
-      - name: Flip symlink and restart API
-        if: >-
-          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
-          env.VM_SSH_KNOWN_HOSTS != ''
-        env:
-          SSH_OPTS: >-
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile=~/.ssh/known_hosts
-            -o BatchMode=yes
-            -o ConnectTimeout=10
-            -o IdentitiesOnly=yes
-        run: |
-          ssh ${SSH_OPTS} -p "${VM_PORT:-22}" "${VM_USER}@${VM_HOST}" \
-            "sudo /usr/local/sbin/sombreado-deploy-release '${RELEASE_SHA}'"
+          # Pin the commit Render should build. Hooks normally include ?key=…;
+          # fall back to ?ref= if a bare URL is configured.
+          if [[ "${RENDER_DEPLOY_HOOK_URL}" == *\?* ]]; then
+            HOOK_URL="${RENDER_DEPLOY_HOOK_URL}&ref=${RELEASE_SHA}"
+          else
+            HOOK_URL="${RENDER_DEPLOY_HOOK_URL}?ref=${RELEASE_SHA}"
+          fi
+          curl -fsS "${HOOK_URL}"
