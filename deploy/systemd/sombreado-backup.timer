@@ -1,3 +1,4 @@
+# PARKED / historical (ADR 0004 superseded by ADR 0005). Not the production deploy path.
 [Unit]
 Description=Daily Sombreado Generation Store backup timer
 
