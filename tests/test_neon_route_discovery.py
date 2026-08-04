@@ -310,6 +310,29 @@ async def test_geometry_returns_frontend_polyline_from_neon(neon_api):
 
 
 @pytest.mark.asyncio
+async def test_geometry_returns_empty_polyline_when_segments_missing_from_neon(neon_api):
+    """Volta is published without segments — empty polyline is a success, not an error."""
+    app, _store, _path = neon_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+    direction_id = _id("direction-a-volta")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/v1/routes/{route_id}/directions/{direction_id}/geometry",
+            params={"routeVersionId": version_id},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "routeId": route_id,
+        "routeVersionId": version_id,
+        "routeDirectionId": direction_id,
+        "polyline": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_geometry_returns_stale_version_error_from_neon(neon_api):
     app, _store, _path = neon_api
     route_id = _id("route-a")
@@ -342,11 +365,71 @@ async def test_geometry_returns_direction_not_found_from_neon(neon_api):
 
 
 @pytest.mark.asyncio
-async def test_preview_advice_uses_current_geometry_from_neon(neon_api):
+@pytest.mark.parametrize(
+    ("mode", "horizon", "include_location"),
+    [
+        ("preview", "remainingRoute", False),
+        ("preview", "upcoming", False),
+        ("onboard", "upcoming", True),
+        ("onboard", "remainingRoute", True),
+    ],
+)
+async def test_advice_modes_and_horizons_use_current_geometry_from_neon(
+    neon_api,
+    mode: str,
+    horizon: str,
+    include_location: bool,
+):
     app, _store, _path = neon_api
     route_id = _id("route-a")
     version_id = _id("version-a")
     direction_id = _id("direction-a-ida")
+    payload: dict[str, object] = {
+        "routeId": route_id,
+        "routeVersionId": version_id,
+        "routeDirectionId": direction_id,
+        "mode": mode,
+        "horizon": horizon,
+        "observedAt": "2026-01-15T15:00:00Z",
+    }
+    if include_location:
+        payload["location"] = {
+            "lat": _ON_ROUTE_LAT,
+            "lng": _ON_ROUTE_LNG,
+            "observedAt": "2026-01-15T15:00:00Z",
+        }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/v1/advice", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "advice"
+    assert body["mode"] == mode
+    assert body["horizon"] == horizon
+    assert body["routeId"] == route_id
+    assert body["routeVersionId"] == version_id
+    assert body["routeDirectionId"] == direction_id
+    assert body["directSunExposure"] in {"left", "right", "front", "back", "overhead", "none"}
+    assert body["recommendedSeatArea"] in {"left", "right", "front", "back", "neutral"}
+    assert body["sunCondition"] in {"night", "lowSun", "daylight", "overhead"}
+    if mode == "preview":
+        assert body["position"] == {
+            "lat": -27.58967698020161,
+            "lng": -48.53424287871695,
+            "source": "directionStart",
+        }
+    else:
+        assert body["position"]["source"] == "liveLocation"
+        assert body["position"]["distanceFromRouteMeters"] == approx(0.0, abs=1.0)
+
+
+@pytest.mark.asyncio
+async def test_advice_withholds_when_current_direction_has_no_segments(neon_api):
+    app, _store, _path = neon_api
+    route_id = _id("route-a")
+    version_id = _id("version-a")
+    direction_id = _id("direction-a-volta")
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -362,20 +445,15 @@ async def test_preview_advice_uses_current_geometry_from_neon(neon_api):
         )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "advice"
-    assert body["mode"] == "preview"
-    assert body["horizon"] == "remainingRoute"
-    assert body["routeId"] == route_id
-    assert body["routeVersionId"] == version_id
-    assert body["routeDirectionId"] == direction_id
-    assert body["directSunExposure"] in {"left", "right", "front", "back", "overhead", "none"}
-    assert body["recommendedSeatArea"] in {"left", "right", "front", "back", "neutral"}
-    assert body["sunCondition"] in {"night", "lowSun", "daylight", "overhead"}
-    assert body["position"] == {
-        "lat": -27.58967698020161,
-        "lng": -48.53424287871695,
-        "source": "directionStart",
+    assert response.json() == {
+        "status": "withheld",
+        "mode": "preview",
+        "horizon": "remainingRoute",
+        "routeId": route_id,
+        "routeVersionId": version_id,
+        "routeDirectionId": direction_id,
+        "reasonCode": "missingRouteGeometry",
+        "computedAt": "2026-01-15T15:00:00Z",
     }
 
 
@@ -423,40 +501,6 @@ async def test_advice_returns_direction_not_found_from_neon(neon_api):
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "routeDirectionNotFound"
-
-
-@pytest.mark.asyncio
-async def test_onboard_advice_uses_current_geometry_from_neon(neon_api):
-    app, _store, _path = neon_api
-    route_id = _id("route-a")
-    version_id = _id("version-a")
-    direction_id = _id("direction-a-ida")
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/v1/advice",
-            json={
-                "routeId": route_id,
-                "routeVersionId": version_id,
-                "routeDirectionId": direction_id,
-                "mode": "onboard",
-                "horizon": "upcoming",
-                "observedAt": "2026-01-15T15:00:00Z",
-                "location": {
-                    "lat": _ON_ROUTE_LAT,
-                    "lng": _ON_ROUTE_LNG,
-                    "observedAt": "2026-01-15T15:00:00Z",
-                },
-            },
-        )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "advice"
-    assert body["mode"] == "onboard"
-    assert body["horizon"] == "upcoming"
-    assert body["position"]["source"] == "liveLocation"
-    assert body["position"]["distanceFromRouteMeters"] == approx(0.0, abs=1.0)
 
 
 @pytest.mark.asyncio
@@ -554,6 +598,7 @@ def test_settings_accept_database_url_for_api(database_url: str, monkeypatch: py
     try:
         settings = Settings().require_api()
         assert settings.database_url == database_url
+        assert "sqlite_database_path" not in Settings.model_fields
     finally:
         get_settings.cache_clear()
 

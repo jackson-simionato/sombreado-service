@@ -1,4 +1,4 @@
-"""ORM statement shape for Neon current discovery and direction choices."""
+"""ORM statement shape for Neon current passenger reads (discovery through advice)."""
 
 from __future__ import annotations
 
