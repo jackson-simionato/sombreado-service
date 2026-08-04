@@ -1,7 +1,10 @@
 """Versioned PostGIS schema migrations for the Generation Store."""
 
+import logging
+
 import pytest
 
+from sombreado.logging import configure_logging
 from sombreado.store.generation import GenerationStore
 
 
@@ -58,3 +61,19 @@ def test_migrate_prefers_store_url_over_conflicting_ambient_database_url(
     with store.connection() as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     assert version == ("20260731_0001",)
+
+
+def test_migrate_preserves_app_log_level(database_url: str, caplog: pytest.LogCaptureFixture):
+    """Programmatic migrate must not reset LOG_LEVEL via alembic fileConfig."""
+    configure_logging("INFO")
+    catalogue = logging.getLogger("sombreado.ingestion.catalogue")
+    assert not catalogue.disabled
+    assert logging.getLogger().level == logging.INFO
+
+    GenerationStore(database_url).migrate()
+
+    assert not catalogue.disabled
+    assert logging.getLogger().level == logging.INFO
+    with caplog.at_level(logging.INFO, logger="sombreado.ingestion.catalogue"):
+        catalogue.info("scrape progress after migrate")
+    assert "scrape progress after migrate" in caplog.text
