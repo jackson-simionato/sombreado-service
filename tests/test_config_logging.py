@@ -8,6 +8,7 @@ from sombreado.logging import configure_logging, get_logger
 
 def test_settings_defaults_use_passenger_api_values(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.database_url == ""
@@ -43,6 +44,19 @@ def test_api_and_cli_settings_accept_database_url(monkeypatch, database_url: str
 
     assert get_api_settings().database_url == database_url
     assert get_cli_settings().database_url == database_url
+
+
+def test_settings_ignore_neon_env_pull_extras(monkeypatch, database_url: str):
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("DATABASE_URL_UNPOOLED", database_url)
+    monkeypatch.setenv("NEON_BRANCH", "production")
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.database_url == database_url
+    assert not hasattr(settings, "neon_branch")
+    assert not hasattr(settings, "database_url_unpooled")
 
 
 def test_api_settings_reject_empty_cors_origins(database_url: str):

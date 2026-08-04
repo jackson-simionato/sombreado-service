@@ -13,7 +13,8 @@ from sombreado.store.object_storage import (
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # Ignore Neon-managed extras from `neon env pull` (e.g. NEON_BRANCH, DATABASE_URL_UNPOOLED).
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Neon/PostGIS Generation Store DSN (Runtime Secret). Required for API/CLI via require_*.
     database_url: str = ""
