@@ -4,16 +4,12 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app
-from app.routes.advisory import get_advisory_service
-from app.routes.nearby import get_route_service
-from app.routes.route_candidates import get_route_service as get_route_candidate_service
-from app.schemas import (
-    AdviceMode,
-    DirectionChoice,
-    RouteCandidate,
-    RouteSegment,
-)
+from sombreado.api.main import create_app
+from sombreado.api.routes.advisory import get_advisory_service
+from sombreado.api.routes.nearby import get_discovery_service, get_route_service
+from sombreado.api.routes.route_candidates import get_route_service as get_route_candidate_service
+from sombreado.api.schemas import DirectionChoice, RouteCandidate
+from sombreado.domain.schemas import AdviceMode, RouteSegment
 
 
 class FakeRouteService:
@@ -95,7 +91,7 @@ class FakeRouteService:
         ]
 
 
-class FakeAdvisoryService:
+class FakeAdviceService:
     async def build_advice(self, request):
         self.last_advice_request = request
         if request.mode is AdviceMode.onboard:
@@ -141,7 +137,7 @@ async def fake_route_service():
 
 
 async def fake_advisory_service():
-    return FakeAdvisoryService()
+    return FakeAdviceService()
 
 
 @pytest.mark.asyncio
@@ -153,6 +149,67 @@ async def test_health_live():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_ready_reports_store_usable(database_url, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    from sombreado.config import get_settings
+
+    get_settings.cache_clear()
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "currentGeneration" in body
+
+
+def test_health_ready_returns_503_when_migrations_absent(database_url, monkeypatch):
+    from starlette.testclient import TestClient
+
+    from sombreado.api.deps import get_generation_store
+    from sombreado.config import get_settings
+    from sombreado.store import GenerationStore
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    get_settings.cache_clear()
+    # Separate unmigrated DB so lifespan migrate on DATABASE_URL cannot heal readiness.
+    empty_url = database_url.rsplit("/", 1)[0] + "/sombreado_test_unmigrated"
+    empty_store = GenerationStore(empty_url)
+
+    app = create_app()
+    app.dependency_overrides[get_generation_store] = lambda: empty_store
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+
+
+def test_health_ready_returns_503_when_store_unusable(database_url, monkeypatch):
+    from starlette.testclient import TestClient
+
+    from sombreado.api.deps import get_generation_store
+    from sombreado.config import get_settings
+    from sombreado.store import GenerationStore
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    get_settings.cache_clear()
+
+    app = create_app()
+    app.dependency_overrides[get_generation_store] = lambda: GenerationStore(
+        "postgresql://invalid:invalid@127.0.0.1:1/does_not_exist"
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -188,7 +245,7 @@ async def test_legacy_route_summary_endpoints_are_removed(path):
 @pytest.mark.asyncio
 async def test_direction_choices_default_to_latest_route_version():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/v1/routes/00000000-0000-0000-0000-000000000001/directions")
@@ -201,7 +258,7 @@ async def test_direction_choices_default_to_latest_route_version():
 @pytest.mark.asyncio
 async def test_direction_choices_validate_route_version_and_return_camel_case_response():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -234,7 +291,7 @@ async def test_direction_choices_validate_route_version_and_return_camel_case_re
 @pytest.mark.asyncio
 async def test_direction_choices_return_empty_list_for_current_route_without_directions():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -256,7 +313,7 @@ async def test_direction_choices_return_empty_list_for_current_route_without_dir
 )
 async def test_direction_choices_return_route_not_found_error(params):
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -272,7 +329,7 @@ async def test_direction_choices_return_route_not_found_error(params):
 @pytest.mark.asyncio
 async def test_direction_choices_return_stale_version_error():
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
@@ -296,7 +353,7 @@ async def test_direction_choices_return_stale_version_error():
 )
 async def test_direction_choices_validation_errors_use_standard_envelope(route_id, params):
     app = create_app()
-    app.dependency_overrides[get_route_service] = fake_route_service
+    app.dependency_overrides[get_discovery_service] = fake_route_service
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/v1/routes/{route_id}/directions", params=params)
@@ -653,6 +710,7 @@ async def test_openapi_exposes_browser_geometry_endpoint_without_legacy_segments
     paths = response.json()["paths"]
     assert set(paths) == {
         "/health/live",
+        "/health/ready",
         "/v1/route-candidates/nearby",
         "/v1/route-candidates/search",
         "/v1/routes/{route_id}/directions",
@@ -718,7 +776,7 @@ async def test_legacy_onboard_advisory_endpoint_is_removed():
 @pytest.mark.asyncio
 async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case():
     app = create_app()
-    fake_service = FakeAdvisoryService()
+    fake_service = FakeAdviceService()
 
     async def override_advisory_service():
         return fake_service
@@ -764,7 +822,7 @@ async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case()
 @pytest.mark.asyncio
 async def test_advice_endpoint_accepts_onboard_contract_with_location():
     app = create_app()
-    fake_service = FakeAdvisoryService()
+    fake_service = FakeAdviceService()
 
     async def override_advisory_service():
         return fake_service
@@ -819,7 +877,7 @@ async def test_advice_endpoint_accepts_onboard_contract_with_location():
 @pytest.mark.asyncio
 async def test_advice_endpoint_accepts_onboard_high_accuracy_and_old_location_timestamp():
     app = create_app()
-    fake_service = FakeAdvisoryService()
+    fake_service = FakeAdviceService()
 
     async def override_advisory_service():
         return fake_service
@@ -991,7 +1049,7 @@ class ExplodingRouteCandidateService:
         raise RuntimeError("boom")
 
 
-class ExplodingAdvisoryService:
+class ExplodingAdviceService:
     async def build_advice(self, request):
         raise RuntimeError("boom")
 
@@ -1025,7 +1083,7 @@ async def test_advice_unexpected_failures_use_service_unavailable_envelope():
     app = create_app()
 
     async def exploding_service():
-        return ExplodingAdvisoryService()
+        return ExplodingAdviceService()
 
     app.dependency_overrides[get_advisory_service] = exploding_service
 

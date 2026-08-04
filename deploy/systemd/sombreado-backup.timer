@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Sombreado Generation Store backup timer
+
+[Timer]
+# Stagger after the scrape window.
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+Unit=sombreado-backup.service
+
+[Install]
+WantedBy=timers.target

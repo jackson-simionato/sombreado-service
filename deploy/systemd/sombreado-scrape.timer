@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Sombreado Consórcio scrape timer
+
+[Timer]
+# Off-peak America/Sao_Paulo; host timezone should match production region.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=sombreado-scrape.service
+
+[Install]
+WantedBy=timers.target

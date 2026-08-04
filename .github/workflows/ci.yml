@@ -14,6 +14,25 @@ jobs:
     name: Lint, test, and build image
     runs-on: ubuntu-latest
 
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sombreado_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sombreado_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sombreado_test
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -31,6 +50,21 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Create unmigrated readiness database
+        run: |
+          uv run python - <<'PY'
+          import psycopg
+          with psycopg.connect(
+              "postgresql://postgres:postgres@localhost:5432/postgres",
+              autocommit=True,
+          ) as connection:
+              exists = connection.execute(
+                  "SELECT 1 FROM pg_database WHERE datname = 'sombreado_test_unmigrated'"
+              ).fetchone()
+              if exists is None:
+                  connection.execute("CREATE DATABASE sombreado_test_unmigrated")
+          PY
+
       - name: Check formatting
         run: uv run ruff format --check .
 
@@ -44,18 +78,90 @@ jobs:
         run: docker build -t sombreado-service:${{ github.sha }} .
 
   deploy:
-    name: Trigger Render deployment
+    name: Deploy release to Oracle VM
     runs-on: ubuntu-latest
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: sombreado-vm-deploy
+      cancel-in-progress: false
     env:
-      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      VM_HOST: ${{ secrets.VM_HOST }}
+      VM_USER: ${{ secrets.VM_USER }}
+      VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+      VM_SSH_KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
+      VM_PORT: ${{ secrets.VM_PORT }}
+      ALLOW_SKIP_DEPLOY: ${{ secrets.ALLOW_SKIP_DEPLOY }}
+      RELEASE_SHA: ${{ github.sha }}
 
     steps:
-      - name: Skip deployment when hook is not configured
-        if: env.RENDER_DEPLOY_HOOK_URL == ''
-        run: echo "RENDER_DEPLOY_HOOK_URL is not configured; skipping Render deployment."
+      - name: Require VM deploy secrets on main
+        if: >-
+          env.VM_HOST == '' || env.VM_USER == '' || env.VM_SSH_PRIVATE_KEY == '' ||
+          env.VM_SSH_KNOWN_HOSTS == ''
+        run: |
+          if [ "${ALLOW_SKIP_DEPLOY}" = "1" ]; then
+            echo "ALLOW_SKIP_DEPLOY=1; skipping VM deployment."
+            exit 0
+          fi
+          echo "VM_HOST / VM_USER / VM_SSH_PRIVATE_KEY / VM_SSH_KNOWN_HOSTS are required on main."
+          echo "Set those secrets, or set ALLOW_SKIP_DEPLOY=1 to opt out explicitly."
+          exit 1
 
-      - name: Trigger Render deploy hook
-        if: env.RENDER_DEPLOY_HOOK_URL != ''
-        run: curl --fail --show-error --silent --request POST "$RENDER_DEPLOY_HOOK_URL"
+      - name: Check out repository
+        if: >-
+          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
+          env.VM_SSH_KNOWN_HOSTS != ''
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        if: >-
+          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
+          env.VM_SSH_KNOWN_HOSTS != ''
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VM_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$VM_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync release tree to VM
+        if: >-
+          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
+          env.VM_SSH_KNOWN_HOSTS != ''
+        env:
+          SSH_OPTS: >-
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o IdentitiesOnly=yes
+        run: |
+          REMOTE_RELEASE="/opt/sombreado/releases/${RELEASE_SHA}"
+          ssh ${SSH_OPTS} -p "${VM_PORT:-22}" "${VM_USER}@${VM_HOST}" "mkdir -p '${REMOTE_RELEASE}'"
+          rsync -az --delete \
+            -e "ssh ${SSH_OPTS} -p ${VM_PORT:-22}" \
+            --exclude '.git/' \
+            --exclude '.venv/' \
+            --exclude '.env' \
+            --exclude 'data/' \
+            --exclude '__pycache__/' \
+            --exclude '.pytest_cache/' \
+            --exclude '.ruff_cache/' \
+            ./ "${VM_USER}@${VM_HOST}:${REMOTE_RELEASE}/"
+
+      - name: Flip symlink and restart API
+        if: >-
+          env.VM_HOST != '' && env.VM_USER != '' && env.VM_SSH_PRIVATE_KEY != '' &&
+          env.VM_SSH_KNOWN_HOSTS != ''
+        env:
+          SSH_OPTS: >-
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile=~/.ssh/known_hosts
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+            -o IdentitiesOnly=yes
+        run: |
+          ssh ${SSH_OPTS} -p "${VM_PORT:-22}" "${VM_USER}@${VM_HOST}" \
+            "sudo /usr/local/sbin/sombreado-deploy-release '${RELEASE_SHA}'"

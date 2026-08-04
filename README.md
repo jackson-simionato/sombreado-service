@@ -1,6 +1,6 @@
 # Sombreado Service
 
-Read-only Python backend for onboard sun-side advisories from the Consorcio Fenix scraper database.
+Python backend for onboard sun-side advisories. Passenger reads use the service-owned Neon/PostGIS Generation Store.
 
 ## Local Setup
 
@@ -13,7 +13,7 @@ Useful development commands:
 
 | Command | Equivalent `uv` command | Purpose |
 | --- | --- | --- |
-| `make start` | `uv run uvicorn app.main:app --reload` | Start the local development server with reload enabled. |
+| `make start` | `uv run uvicorn sombreado.api.main:app --reload` | Start the local development server with reload enabled. |
 | `make test` | `uv run python -m pytest -q` | Run the test suite. |
 | `make format` | `uv run ruff format .` | Format Python files. |
 | `make lint` | `uv run ruff check .` | Run lint checks. |
@@ -30,6 +30,33 @@ See `docs/engineering-standards.md` for branch, commit, PR, and agent workflow s
 
 The project targets Python 3.14 through `.python-version` and `requires-python = ">=3.14"`.
 
+## Package layout
+
+Installable code lives under `src/sombreado/` with two process entry points:
+
+| Entry | How to run | Role |
+| --- | --- | --- |
+| API | `make start` / `uvicorn sombreado.api.main:app` | Passenger browser API (discovery, directions, geometry, advice from Generation Store `current`) |
+| Scrape CLI | `sombreado-scrape scrape` / `python -m sombreado.cli scrape` | Live Consórcio scrape; `publish-fixture` demos the store |
+
+PostGIS Generation Store schema is versioned with Alembic under `migrations/`. Migrations apply automatically on deploy/startup:
+
+- Docker entrypoint (`scripts/docker-entrypoint.sh`) runs `GenerationStore.migrate()` before uvicorn
+- API process lifespan migrates on boot (covers `make start`)
+- Scrape / publish-fixture / migrate CLI paths migrate before use
+
+Manual upgrade when needed:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test uv run alembic upgrade head
+```
+
+### Generation Store backup and restore
+
+`sombreado-scrape backup` and `sombreado-scrape restore` are **parked** for the Neon Generation Store: both commands exit non-zero and must not be used as the production recovery path. Recovery beyond Neon’s short PITR window is a fresh scrape into an empty/migrated store.
+
+Module seams: `api`, `cli`, `store`, `route_reads`, `advice`, `ingestion`, plus shared `config`, `logging`, and `domain`.
+
 ## Configuration
 
 Settings are loaded from environment variables and `.env`.
@@ -42,37 +69,37 @@ browser origins with a JSON list:
 CORS_ORIGINS='["https://app.example.com"]'
 ```
 
-## Database Access
+## Datastore
 
-`sombreado-service` consumes the scraper-owned PostGIS schema as a separate read-only database user. Do not use the scraper ingestion or migration owner role for this service.
-
-Example role setup:
-
-```sql
-CREATE ROLE sombreado_service_reader LOGIN PASSWORD 'change-me';
-
-GRANT CONNECT ON DATABASE consorcio_fenix TO sombreado_service_reader;
-GRANT USAGE ON SCHEMA public TO sombreado_service_reader;
-
-GRANT SELECT ON TABLE
-  routes,
-  route_versions,
-  route_directions,
-  route_segments,
-  service_directions
-TO sombreado_service_reader;
-
-ALTER DEFAULT PRIVILEGES IN SCHEMA public
-GRANT SELECT ON TABLES TO sombreado_service_reader;
-```
-
-The service `DATABASE_URL` should use that role:
+Passenger API reads use the Neon/PostGIS Generation Store:
 
 ```bash
-DATABASE_URL=postgresql+asyncpg://sombreado_service_reader:change-me@localhost:5432/consorcio_fenix
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test
 ```
 
-Do not grant `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, ownership, migration, or DDL privileges to the service role.
+Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. Nearby uses PostGIS geography (`ST_DWithin` + GIST) against the `current` pointer.
+
+Run a full Consórcio scrape into a Neon or local PostGIS Generation Store (no GitHub Actions required):
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test \
+  uv run sombreado-scrape scrape
+# or: uv run sombreado-scrape scrape --database-url "$DATABASE_URL"
+```
+
+Hard failure of a still-listed route exits non-zero and leaves the last good `current` pointer unchanged. Use `--force` only to reclaim a held scrape lease and discard incomplete staging — not to skip validation.
+
+## Production (Render Free + Neon)
+
+Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (`DATABASE_URL` Runtime Secret on Render). Scrape/publish runs as a GitHub Actions job against Neon (not on the web instance). After CI passes on `main`, deploy is via Render Deploy Hook (Pipeline Secret); see epic #66 / ADR 0005 when wired.
+
+Scheduled scrape is `.github/workflows/scrape.yml`: daily `schedule` (off-peak `America/Sao_Paulo`) plus `workflow_dispatch`. Set the Neon writer URL as the Actions repository secret `DATABASE_URL` (Pipeline Secret). The Render web service does not need scrape writer credentials for this job, and scrape is not a Render cron/worker/one-off. A failed scrape after the CLI’s one automatic retry fails the Actions job so repo watchers get the default failure notification. Use `workflow_dispatch` with `force=true` only for lease/staging recovery.
+
+Recovery beyond Neon’s short PITR window is a fresh scrape. `sombreado-scrape backup` / `restore` are parked and are not the production backup path.
+
+### Retired: Oracle Always Free VM
+
+The Oracle VM layout under `deploy/` (rsync releases, systemd `sombreado-api` / scrape / backup timers, on-host SQLite under `/var/lib/sombreado/`) is **historical**. Do not treat those units or `sombreado-backup.timer` as the current Generation Store path.
 
 ## Public Endpoints
 
@@ -82,6 +109,7 @@ service boundary. Browser/frontend code should still treat `routeId`,
 meaning from them.
 
 - `GET /health/live`
+- `GET /health/ready` — Generation Store openable after migrate; includes `currentGeneration` (may be `null` before the first publish)
 - `GET /v1/route-candidates/nearby`
   - Finds current route candidates near a passenger location for the browser nearby route path.
   - Query parameters:

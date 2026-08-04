@@ -1,0 +1,63 @@
+name: Scrape
+
+on:
+  schedule:
+    # Off-peak America/Sao_Paulo; matches retired systemd timer intent (#28 / #72).
+    - cron: "30 3 * * *"
+      timezone: America/Sao_Paulo
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Discard incomplete staging and reclaim a held scrape lease, then scrape
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sombreado-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    name: Full Consórcio scrape into Neon
+    runs-on: ubuntu-latest
+    # Headroom over ~102s full scrape; CLI performs one in-process retry (#28).
+    timeout-minutes: 20
+    env:
+      # Pipeline Secret: Neon writer credentials (not required on the Render web service for scrape).
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - name: Require Neon Pipeline Secret
+        if: env.DATABASE_URL == ''
+        run: |
+          echo "DATABASE_URL repository secret is required for scrape against Neon."
+          echo "Set it as a Pipeline Secret (Actions), not as a Render scrape cron credential."
+          exit 1
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run scrape
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            uv run sombreado-scrape scrape --force
+          else
+            uv run sombreado-scrape scrape
+          fi
