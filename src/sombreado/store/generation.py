@@ -75,6 +75,8 @@ class GenerationStore:
         """Apply Alembic versioned migrations up to head for this database."""
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("sqlalchemy.url", sqlalchemy_database_url(self.database_url))
+        # Prefer this store URL over ambient DATABASE_URL in migrations/env.py.
+        config.attributes["database_url"] = self.database_url
         command.upgrade(config, "head")
 
     def claim_scrape_lease(

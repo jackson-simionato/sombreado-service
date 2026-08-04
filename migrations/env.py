@@ -26,6 +26,10 @@ def _normalize_database_url(url: str) -> str:
 
 
 def _database_url() -> str:
+    # GenerationStore.migrate() sets this so CLI --database-url wins over ambient env.
+    override = config.attributes.get("database_url")
+    if isinstance(override, str) and override.strip():
+        return _normalize_database_url(override)
     configured = os.environ.get("DATABASE_URL")
     if configured and configured.strip():
         return _normalize_database_url(configured)
