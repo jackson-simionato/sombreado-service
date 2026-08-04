@@ -14,8 +14,9 @@ def test_ci_deploys_via_render_deploy_hook_after_ci_on_main():
     assert "needs: ci" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "secrets.RENDER_DEPLOY_HOOK_URL" in workflow
-    assert "curl -fsS" in workflow
-    assert "ref=${RELEASE_SHA}" in workflow
+    assert "curl -fsS --connect-timeout 10 --max-time 30" in workflow
+    assert "&ref=${RELEASE_SHA}" in workflow
+    assert "?ref=${RELEASE_SHA}" in workflow
     assert "RELEASE_SHA" in workflow
 
     assert "concurrency:" in workflow
