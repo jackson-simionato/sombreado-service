@@ -29,8 +29,8 @@ The singleton DB-backed mutual-exclusion record that prevents overlapping scrape
 _Avoid_: Distributed lock service, API request lock
 
 **Scraper Database**:
-Retired passenger-read seam. Historically the PostGIS database owned by the Consorcio Fenix scraper; the API no longer depends on it. Remains relevant only until cutover retires the standalone scraper deployment.
-_Avoid_: App database, service database, Generation Store
+Retired passenger-read seam. Historically the PostGIS database owned by the Consorcio Fenix scraper; the API no longer depends on it. After the ADR 0009 overwrite flip it must not receive scraper writes; it may stay idle ~48h for emergency redeploy of pre-cutover code only, then is destroyed with no archive.
+_Avoid_: App database, service database, Generation Store, dual-writer path after Neon flip
 
 **Reader Database Role**:
 Retired passenger-read seam. Historically the SELECT-only database user used by the API against scraper-owned tables; the API no longer uses this role.
@@ -133,6 +133,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - A **Dataset Generation** becomes passenger-visible only through the current pointer after validate-then-publish.
 - Incomplete staging never auto-publishes; failure retains the last successful current (+ previous when present).
 - The API runtime path does not use the retired **Reader Database Role** or **Scraper Database**.
+- After ADR 0009 cutover flip, production passengers stay on the existing Render Free URL while the **Generation Store** is Neon `current`; standalone scraper writes stop at flip (no dual writers).
 - The **Scrape CLI** must not run inside the API request path.
 - **Route Discovery** exposes only **Current Route Data**.
 - **Route Discovery** supports **Route Search** and a **Nearby Route Filter**.
@@ -203,6 +204,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 
 - The **Generation Store** is the passenger read path for discovery, directions, geometry, and advice.
 - **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
+- Cutover is overwrite-in-place on Render Free (ADR 0009): frontend `NEXT_PUBLIC_API_URL` unchanged; scraper PostGIS is idle-hold then destroy, not a warm dual-Render rollback host.
 - "deploy" means CI on `main` then Render Deploy Hook for the API; scrape is Actions-only against Neon — not Oracle VM rsync or co-located scrape on the web service.
 - `DATABASE_URL` is the passenger API and scrape CLI Generation Store setting; `SQLITE_DATABASE_PATH` is not the production store path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.

@@ -35,3 +35,4 @@ Do not place the Deploy Hook URL on Render. Do not require scrape writer credent
 - Deploy jobs use a concurrency group so overlapping Deploy Hook calls do not race.
 - Operators configure Render Runtime Secrets in the Render Dashboard (or Blueprint `sync: false`); Actions Pipeline Secrets stay in GitHub.
 - `deploy/` Oracle bootstrap/systemd/SSH scripts remain historical only.
+- Overwrite cutover onto Neon and standalone scraper retirement follow ADR 0009.
