@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
 import psycopg
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
+
+logger = logging.getLogger(__name__)
+
+# Batch size for route_segments inserts (PostGIS geography). Pipeline + chunks
+# beats one round-trip per row on Neon Free without a single huge payload.
+_SEGMENT_INSERT_BATCH_SIZE = 500
 
 _TABLES = (
     "routes",
@@ -205,36 +212,51 @@ def insert_service_directions(connection: psycopg.Connection, rows: Sequence[Map
 
 
 def insert_segments(connection: psycopg.Connection, rows: Sequence[Mapping[str, object]]) -> None:
+    """Insert staged route segments in pipelined batches (not one sync round-trip each)."""
+    if not rows:
+        return
+
+    sql = """
+        INSERT INTO route_segments(
+            public_id, route_version_id, route_direction_id, sequence,
+            source_segment_sequence, source_fraction_start, source_fraction_end,
+            geometry, geom, bearing_degrees, distance_meters, cumulative_distance_meters
+        ) VALUES (
+            %(public_id)s, %(route_version_id)s, %(route_direction_id)s, %(sequence)s,
+            %(source_segment_sequence)s, %(source_fraction_start)s, %(source_fraction_end)s,
+            %(geometry)s, ST_GeogFromText(%(wkt)s), %(bearing_degrees)s,
+            %(distance_meters)s, %(cumulative_distance_meters)s
+        )
+    """
+    payload = [
+        {
+            "public_id": row["id"],
+            "route_version_id": row["route_version_id"],
+            "route_direction_id": row["route_direction_id"],
+            "sequence": row["sequence"],
+            "source_segment_sequence": row["source_segment_sequence"],
+            "source_fraction_start": row["source_fraction_start"],
+            "source_fraction_end": row["source_fraction_end"],
+            "geometry": row["geometry"],
+            "wkt": geography_wkt(str(row["geometry"])),
+            "bearing_degrees": row["bearing_degrees"],
+            "distance_meters": row["distance_meters"],
+            "cumulative_distance_meters": row["cumulative_distance_meters"],
+        }
+        for row in rows
+    ]
+    total = len(payload)
     with connection.cursor() as cursor:
-        for row in rows:
-            wkt = geography_wkt(str(row["geometry"]))
-            cursor.execute(
-                """
-                INSERT INTO route_segments(
-                    public_id, route_version_id, route_direction_id, sequence,
-                    source_segment_sequence, source_fraction_start, source_fraction_end,
-                    geometry, geom, bearing_degrees, distance_meters, cumulative_distance_meters
-                ) VALUES (
-                    %(public_id)s, %(route_version_id)s, %(route_direction_id)s, %(sequence)s,
-                    %(source_segment_sequence)s, %(source_fraction_start)s, %(source_fraction_end)s,
-                    %(geometry)s, ST_GeogFromText(%(wkt)s), %(bearing_degrees)s,
-                    %(distance_meters)s, %(cumulative_distance_meters)s
-                )
-                """,
-                {
-                    "public_id": row["id"],
-                    "route_version_id": row["route_version_id"],
-                    "route_direction_id": row["route_direction_id"],
-                    "sequence": row["sequence"],
-                    "source_segment_sequence": row["source_segment_sequence"],
-                    "source_fraction_start": row["source_fraction_start"],
-                    "source_fraction_end": row["source_fraction_end"],
-                    "geometry": row["geometry"],
-                    "wkt": wkt,
-                    "bearing_degrees": row["bearing_degrees"],
-                    "distance_meters": row["distance_meters"],
-                    "cumulative_distance_meters": row["cumulative_distance_meters"],
-                },
+        for offset in range(0, total, _SEGMENT_INSERT_BATCH_SIZE):
+            batch = payload[offset : offset + _SEGMENT_INSERT_BATCH_SIZE]
+            # psycopg3 executemany is only faster than execute-in-a-loop inside a pipeline.
+            with connection.pipeline():
+                cursor.executemany(sql, batch)
+            logger.info(
+                "Staged route segments %s-%s/%s",
+                offset + 1,
+                offset + len(batch),
+                total,
             )
 
 
