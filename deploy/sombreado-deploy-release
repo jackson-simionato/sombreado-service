@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# PARKED / historical (ADR 0004 superseded by ADR 0005). Not the production deploy path.
 # Root-owned fixed-path activator installed at /usr/local/sbin/sombreado-deploy-release.
 # Validates RELEASE_SHA, then runs the root-owned deploy-release implementation.
 # Sudoers must point only at this path — never at user-writable release trees.

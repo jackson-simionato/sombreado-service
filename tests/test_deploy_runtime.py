@@ -1,4 +1,8 @@
-"""Contracts for Oracle VM deploy + systemd runtime units (#42)."""
+"""Historical contracts for parked Oracle VM deploy + systemd units (#42 / #68).
+
+Production deploy is CI → Render Deploy Hook (see tests/test_deploy_workflow.py).
+These tests keep the parked `deploy/` scripts honest; they are not the happy path.
+"""
 
 from __future__ import annotations
 
@@ -503,23 +507,6 @@ def test_env_example_uses_database_url_for_generation_store():
     env_example = (DEPLOY_DIR / "env.example").read_text(encoding="utf-8")
     assert "DATABASE_URL=" in env_example
     assert "SQLITE_DATABASE_PATH=" not in env_example
-
-
-def test_ci_pins_known_hosts_and_uses_fixed_activator():
-    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "VM_SSH_KNOWN_HOSTS" in workflow
-    assert "ssh-keyscan" not in workflow
-    assert "StrictHostKeyChecking=yes" in workflow
-    assert "BatchMode=yes" in workflow
-    assert "ConnectTimeout=10" in workflow
-    assert "IdentitiesOnly=yes" in workflow
-    assert "concurrency:" in workflow
-    assert "sombreado-vm-deploy" in workflow
-    assert "cancel-in-progress: false" in workflow
-    assert "ALLOW_SKIP_DEPLOY" in workflow
-    assert "exit 1" in workflow
-    assert "/usr/local/sbin/sombreado-deploy-release" in workflow
-    assert "/opt/sombreado/releases/${RELEASE_SHA}/deploy/deploy-release.sh" not in workflow
 
 
 @requires_gnu_coreutils

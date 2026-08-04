@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# PARKED / historical (ADR 0004 superseded by ADR 0005). Not the production deploy path.
 # One-time Oracle VM host preparation. Safe to re-run; never deletes the data dir.
 #
 #   sudo DEPLOY_USER=ubuntu ./deploy/bootstrap-vm.sh

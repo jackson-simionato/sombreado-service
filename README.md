@@ -91,15 +91,24 @@ Hard failure of a still-listed route exits non-zero and leaves the last good `cu
 
 ## Production (Render Free + Neon)
 
-Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (`DATABASE_URL` Runtime Secret on Render). Scrape/publish runs as a GitHub Actions job against Neon (not on the web instance). After CI passes on `main`, deploy is via Render Deploy Hook (Pipeline Secret); see epic #66 / ADR 0005 when wired.
+Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (ADR 0005).
+
+### Runtime Secrets vs Pipeline Secrets
+
+| Kind | Where | Secrets |
+| --- | --- | --- |
+| **Runtime Secret** | Render web service env | `DATABASE_URL` (Neon) for the passenger API |
+| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL` (CI deploy); `DATABASE_URL` (Neon writer for scrape) |
+
+After CI passes on `main`, `.github/workflows/ci.yml` calls the Render Deploy Hook (`RENDER_DEPLOY_HOOK_URL`, optionally skipped with `ALLOW_SKIP_DEPLOY=1`). Do not put the Deploy Hook URL on Render.
 
 Scheduled scrape is `.github/workflows/scrape.yml`: daily `schedule` (off-peak `America/Sao_Paulo`) plus `workflow_dispatch`. Set the Neon writer URL as the Actions repository secret `DATABASE_URL` (Pipeline Secret). The Render web service does not need scrape writer credentials for this job, and scrape is not a Render cron/worker/one-off. A failed scrape after the CLI’s one automatic retry fails the Actions job so repo watchers get the default failure notification. Use `workflow_dispatch` with `force=true` only for lease/staging recovery.
 
-Recovery beyond Neon’s short PITR window is a fresh scrape. `sombreado-scrape backup` / `restore` are parked and are not the production backup path.
+Recovery beyond Neon’s short PITR window is a fresh scrape (ADR 0008). `sombreado-scrape backup` / `restore` and Object Storage are parked and are not the production backup path.
 
-### Retired: Oracle Always Free VM
+### Parked: Oracle Always Free VM
 
-The Oracle VM layout under `deploy/` (rsync releases, systemd `sombreado-api` / scrape / backup timers, on-host SQLite under `/var/lib/sombreado/`) is **historical**. Do not treat those units or `sombreado-backup.timer` as the current Generation Store path.
+The Oracle VM layout under `deploy/` (rsync releases, systemd `sombreado-api` / scrape / backup timers, on-host SQLite under `/var/lib/sombreado/`) is **parked / historical** (ADR 0004 superseded by ADR 0005). It is not the production deploy happy path — see `deploy/README.md`.
 
 ## Public Endpoints
 

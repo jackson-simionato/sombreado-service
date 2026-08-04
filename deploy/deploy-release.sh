@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# PARKED / historical (ADR 0004 superseded by ADR 0005). Not the production deploy path.
 # Activate a synced release on the Oracle VM.
 #
 # Expected layout (defaults):
