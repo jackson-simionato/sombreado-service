@@ -11,7 +11,10 @@ from sqlalchemy import create_engine, pool
 
 config = context.config
 
-if config.config_file_name is not None:
+# GenerationStore.migrate() already configured app logging (LOG_LEVEL). Applying
+# alembic.ini fileConfig would reset root to WARN and disable existing loggers,
+# silencing scrape/API progress. Keep fileConfig for bare `alembic` CLI only.
+if config.config_file_name is not None and not config.attributes.get("database_url"):
     fileConfig(config.config_file_name)
 
 # Raw SQL revisions — no SQLAlchemy metadata autogenerate for this store yet.
@@ -26,6 +29,10 @@ def _normalize_database_url(url: str) -> str:
 
 
 def _database_url() -> str:
+    # GenerationStore.migrate() sets this so CLI --database-url wins over ambient env.
+    override = config.attributes.get("database_url")
+    if isinstance(override, str) and override.strip():
+        return _normalize_database_url(override)
     configured = os.environ.get("DATABASE_URL")
     if configured and configured.strip():
         return _normalize_database_url(configured)

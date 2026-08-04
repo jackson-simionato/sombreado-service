@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from sombreado.config import get_cli_settings
+from sombreado.config import get_cli_settings, get_settings
 from sombreado.ingestion.catalogue import ConsorcioCatalogueSource
 from sombreado.ingestion.scrape import run_scrape
 from sombreado.logging import configure_logging
@@ -17,8 +17,15 @@ app = typer.Typer(help="Sombreado Service scrape commands.", no_args_is_help=Tru
 @app.callback()
 def _root() -> None:
     """Configure logging, then run the requested command."""
-    settings = get_cli_settings()
-    configure_logging(settings.log_level)
+    # Logging must not require DATABASE_URL so --database-url alone can run scrape.
+    configure_logging(get_settings().log_level)
+
+
+def _resolve_database_url(database_url: str | None) -> str:
+    """Prefer an explicit CLI URL, else require the CLI settings DATABASE_URL."""
+    if database_url is not None and database_url.strip():
+        return database_url.strip()
+    return get_cli_settings().database_url.strip()
 
 
 @app.command("scrape")
@@ -28,10 +35,14 @@ def scrape(
         "--force",
         help="Discard incomplete staging and reclaim a held scrape lease, then scrape.",
     ),
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="Postgres DATABASE_URL (defaults to DATABASE_URL env).",
+    ),
 ) -> None:
     """Fetch live Consórcio Fênix data, validate, and publish under operating policy."""
-    settings = get_cli_settings()
-    store = GenerationStore(settings.database_url)
+    store = GenerationStore(_resolve_database_url(database_url))
     store.migrate()
     outcome = run_scrape(
         store,
@@ -69,10 +80,8 @@ def publish_fixture_command(
     ),
 ) -> None:
     """Publish a fixture/snapshot generation and print the current pointer."""
-    settings = get_cli_settings()
-    url = (database_url or settings.database_url).strip()
     published_id, store = publish_demo_fixture(
-        url,
+        _resolve_database_url(database_url),
         fixture_path=fixture,
         generation_id=generation_id,
     )

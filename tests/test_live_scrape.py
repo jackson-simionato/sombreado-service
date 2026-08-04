@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from sombreado.ingestion.canonical import snapshots_to_canonical_rows
+from sombreado.ingestion.domain import (
+    DirectionMatchConfidence,
+    DirectionMatchMethod,
+    ParsedRoutePage,
+    RouteDirection,
+    RouteSnapshot,
+    ServiceDirection,
+    ServiceDirectionMatch,
+)
 from sombreado.ingestion.scrape import ScrapeCollection, run_scrape
 from sombreado.store.generation import CanonicalRows, GenerationStore
 from sombreado.store.sample_data import sample_generation_rows
@@ -42,6 +52,52 @@ def _seed_current(store: GenerationStore, suffix: str = "a") -> CanonicalRows:
     store.validate(f"gen-{suffix}")
     store.publish(f"gen-{suffix}")
     return rows
+
+
+def _live_shaped_collection(*, code: str = "210") -> ScrapeCollection:
+    """Canonical rows shaped like Consórcio catalogue materialization."""
+    snapshot = RouteSnapshot(
+        route=ParsedRoutePage(
+            code=code,
+            name=f"Route {code}",
+            slug=f"route-{code}",
+            page_url=f"https://example.test/horarios/route-{code},{code}",
+            map_url="https://example.test/map",
+            category="conventional",
+            fare_region=None,
+            last_changed=None,
+            service_directions=[
+                ServiceDirection(
+                    sequence=1,
+                    departure_label="Centro",
+                    normalized_name="centro",
+                    direction_kind="ida",
+                )
+            ],
+        ),
+        directions=[
+            RouteDirection(
+                name="Centro",
+                coordinates=[(-48.53424, -27.58967), (-48.53429, -27.58967)],
+                direction_kind="ida",
+            )
+        ],
+        direction_matches=[
+            ServiceDirectionMatch(
+                service_direction_sequence=1,
+                route_direction_sequence=1,
+                confidence=DirectionMatchConfidence.HIGH,
+                method=DirectionMatchMethod.LABEL_ENDPOINT,
+            )
+        ],
+        source_hash="live-source",
+        map_hash="live-map",
+    )
+    return ScrapeCollection(
+        rows=snapshots_to_canonical_rows([snapshot]),
+        hard_failures=(),
+        warnings=("stop_adapter=unavailable",),
+    )
 
 
 def test_active_lease_fails_fast_without_force(database_url: str):
@@ -102,15 +158,7 @@ def test_successful_scrape_publishes_new_current(database_url: str):
     store.migrate()
     _seed_current(store)
 
-    source = FakeSource(
-        [
-            ScrapeCollection(
-                rows=sample_generation_rows(generation_suffix="b"),
-                hard_failures=(),
-                warnings=("stop_adapter=unavailable",),
-            )
-        ]
-    )
+    source = FakeSource([_live_shaped_collection(code="210")])
 
     outcome = run_scrape(store, source, holder_id="cli-1")
 
@@ -118,6 +166,19 @@ def test_successful_scrape_publishes_new_current(database_url: str):
     assert store.current_generation() == outcome.generation_id
     assert store.previous_generation() == "gen-a"
     assert store.scrape_lease_holder() is None
+    with store.connection() as connection:
+        geography_count = connection.execute(
+            """
+            SELECT count(*)
+            FROM dataset_route_versions AS member
+            JOIN route_segments AS segment
+                ON segment.route_version_id = member.route_version_id
+            WHERE member.generation_id = %(generation_id)s
+                AND segment.geom IS NOT NULL
+            """,
+            {"generation_id": outcome.generation_id},
+        ).fetchone()[0]
+    assert geography_count >= 1
 
 
 def test_force_reclaims_active_lease_and_discards_incomplete_staging(database_url: str):
@@ -127,17 +188,40 @@ def test_force_reclaims_active_lease_and_discards_incomplete_staging(database_ur
     store.stage("orphan", sample_generation_rows(generation_suffix="orphan"))
     store.claim_scrape_lease("stale-worker", ttl_seconds=600)
 
-    source = FakeSource(
-        [
-            ScrapeCollection(
-                rows=sample_generation_rows(generation_suffix="b"),
-                hard_failures=(),
-                warnings=(),
-            )
-        ]
-    )
+    source = FakeSource([_live_shaped_collection(code="220")])
 
     outcome = run_scrape(store, source, force=True, holder_id="cli-1")
+
+    assert outcome.status == "published"
+    assert store.current_generation() == outcome.generation_id
+    assert not store.has_generation("orphan")
+    assert store.scrape_lease_holder() is None
+
+
+def test_expired_lease_is_reclaimed_without_force(database_url: str):
+    store = GenerationStore(database_url)
+    store.migrate()
+    _seed_current(store)
+    store.stage("orphan", sample_generation_rows(generation_suffix="orphan"))
+    store.claim_scrape_lease("expired-worker", ttl_seconds=600)
+    with store.connection() as connection:
+        connection.execute(
+            """
+            UPDATE scrape_lease
+            SET expires_at = %(past)s
+            WHERE singleton = 1
+            """,
+            {"past": datetime.now(UTC) - timedelta(seconds=1)},
+        )
+        connection.commit()
+
+    outcome = run_scrape(
+        store,
+        FakeSource([_live_shaped_collection(code="230")]),
+        force=False,
+        holder_id="cli-1",
+        retry_backoff_seconds=0,
+    )
 
     assert outcome.status == "published"
     assert store.current_generation() == outcome.generation_id

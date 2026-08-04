@@ -79,6 +79,16 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test
 
 Publish a demo generation with the scrape CLI (`publish-fixture`) when you need local route data without a live Consórcio scrape. Nearby uses PostGIS geography (`ST_DWithin` + GIST) against the `current` pointer.
 
+Run a full Consórcio scrape into a Neon or local PostGIS Generation Store (no GitHub Actions required):
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sombreado_test \
+  uv run sombreado-scrape scrape
+# or: uv run sombreado-scrape scrape --database-url "$DATABASE_URL"
+```
+
+Hard failure of a still-listed route exits non-zero and leaves the last good `current` pointer unchanged. Use `--force` only to reclaim a held scrape lease and discard incomplete staging — not to skip validation.
+
 ## Production (Render Free + Neon)
 
 Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (`DATABASE_URL` Runtime Secret on Render). Scrape/publish runs as a GitHub Actions job against Neon (not on the web instance). After CI passes on `main`, deploy is via Render Deploy Hook (Pipeline Secret); see epic #66 / ADR 0005 when wired.
