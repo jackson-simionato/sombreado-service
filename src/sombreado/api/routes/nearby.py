@@ -14,7 +14,7 @@ from sombreado.route_reads.current import CurrentRouteReadService
 
 router = APIRouter(prefix="/v1", tags=["routes"])
 
-# Re-export for tests that override the SQLite passenger-read dependency by this name.
+# Re-export for tests that override the passenger-read dependency by this name.
 get_discovery_service = get_current_route_service
 get_route_service = get_current_route_service
 

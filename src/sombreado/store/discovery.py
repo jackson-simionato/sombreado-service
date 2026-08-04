@@ -4,153 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import psycopg
-from psycopg.rows import dict_row
+from geoalchemy2 import Geography
+from sqlalchemy import and_, cast, func, or_, select
+from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
-_SEARCH_SQL = """
-    SELECT
-        routes.id AS route_id,
-        dataset_route_versions.route_version_id AS route_version_id,
-        routes.code AS route_code,
-        routes.name AS route_name
-    FROM routes
-    JOIN dataset_route_versions
-        ON dataset_route_versions.route_id = routes.id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE routes.code ILIKE %(pattern)s
-       OR routes.name ILIKE %(pattern)s
-    ORDER BY routes.code ASC, routes.name ASC
-    LIMIT %(limit)s
-"""
+from sombreado.store.models import (
+    DatasetPointerRecord,
+    DatasetRouteVersionRecord,
+    RouteDirectionRecord,
+    RouteRecord,
+    RouteSegmentRecord,
+    ServiceDirectionRecord,
+)
 
-_NEARBY_CANDIDATE_SQL = """
-    SELECT
-        routes.id AS route_id,
-        dataset_route_versions.route_version_id AS route_version_id,
-        routes.code AS route_code,
-        routes.name AS route_name,
-        MIN(
-            ST_Distance(
-                route_segments.geom,
-                ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography
-            )
-        ) AS distance_meters
-    FROM dataset_pointers
-    JOIN dataset_route_versions
-        ON dataset_route_versions.generation_id = dataset_pointers.generation_id
-    JOIN routes
-        ON routes.id = dataset_route_versions.route_id
-    JOIN route_segments
-        ON route_segments.route_version_id = dataset_route_versions.route_version_id
-    WHERE dataset_pointers.role = 'current'
-      AND ST_DWithin(
-          route_segments.geom,
-          ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography,
-          %(radius)s
-      )
-    GROUP BY routes.id, dataset_route_versions.route_version_id, routes.code, routes.name
-    ORDER BY distance_meters ASC, routes.code ASC, routes.name ASC, routes.id ASC
-    LIMIT %(limit)s
-"""
-
-_HINTS_SQL = """
-    SELECT
-        route_directions.route_version_id,
-        service_directions.departure_label
-    FROM service_directions
-    JOIN route_directions
-        ON route_directions.id = service_directions.route_direction_id
-    JOIN dataset_route_versions
-        ON dataset_route_versions.route_version_id = route_directions.route_version_id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE service_directions.route_direction_id IS NOT NULL
-      AND service_directions.confidence IN ('high', 'medium')
-      AND route_directions.route_version_id = ANY(%(version_ids)s)
-    ORDER BY
-        route_directions.route_version_id ASC,
-        route_directions.sequence ASC,
-        service_directions.sequence ASC
-"""
-
-_CURRENT_VERSION_SQL = """
-    SELECT dataset_route_versions.route_version_id
-    FROM dataset_route_versions
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE dataset_route_versions.route_id = %(route_id)s
-"""
-
-_DIRECTION_CHOICES_SQL = """
-    SELECT
-        route_directions.id,
-        route_directions.sequence,
-        route_directions.name,
-        route_directions.direction_kind
-    FROM route_directions
-    JOIN dataset_route_versions
-        ON dataset_route_versions.route_version_id = route_directions.route_version_id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE route_directions.route_version_id = %(route_version_id)s
-    ORDER BY route_directions.sequence ASC
-"""
-
-_DEPARTURE_LABELS_SQL = """
-    SELECT
-        service_directions.route_direction_id,
-        service_directions.departure_label
-    FROM service_directions
-    JOIN route_directions
-        ON route_directions.id = service_directions.route_direction_id
-    JOIN dataset_route_versions
-        ON dataset_route_versions.route_version_id = route_directions.route_version_id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE service_directions.route_direction_id IS NOT NULL
-      AND service_directions.confidence IN ('high', 'medium')
-      AND route_directions.route_version_id = %(route_version_id)s
-    ORDER BY
-        route_directions.sequence ASC,
-        service_directions.sequence ASC
-"""
-
-_DIRECTION_MEMBERSHIP_SQL = """
-    SELECT 1
-    FROM route_directions
-    JOIN dataset_route_versions
-        ON dataset_route_versions.route_version_id = route_directions.route_version_id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE route_directions.route_version_id = %(route_version_id)s
-      AND route_directions.id = %(route_direction_id)s
-"""
-
-_SEGMENTS_SQL = """
-    SELECT
-        route_segments.public_id,
-        route_segments.sequence,
-        route_segments.geometry,
-        route_segments.bearing_degrees,
-        route_segments.distance_meters,
-        route_segments.cumulative_distance_meters
-    FROM route_segments
-    JOIN dataset_route_versions
-        ON dataset_route_versions.route_version_id = route_segments.route_version_id
-    JOIN dataset_pointers
-        ON dataset_pointers.generation_id = dataset_route_versions.generation_id
-        AND dataset_pointers.role = 'current'
-    WHERE route_segments.route_version_id = %(route_version_id)s
-      AND route_segments.route_direction_id = %(route_direction_id)s
-    ORDER BY route_segments.sequence ASC
-"""
+PUBLIC_DIRECTION_LABEL_CONFIDENCES = ("high", "medium")
 
 
 @dataclass(frozen=True)
@@ -182,18 +50,236 @@ class RouteSegmentRow:
     cumulative_distance_meters: float
 
 
+def search_route_candidates_statement(*, query: str, limit: int) -> Select:
+    """Build the ORM select for current-generation Route Candidate search."""
+    pattern = f"%{query}%"
+    return (
+        select(
+            RouteRecord.id.label("route_id"),
+            DatasetRouteVersionRecord.route_version_id.label("route_version_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+        )
+        .select_from(RouteRecord)
+        .join(DatasetRouteVersionRecord, DatasetRouteVersionRecord.route_id == RouteRecord.id)
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(or_(RouteRecord.code.ilike(pattern), RouteRecord.name.ilike(pattern)))
+        .order_by(RouteRecord.code.asc(), RouteRecord.name.asc())
+        .limit(limit)
+    )
+
+
+def nearby_route_candidates_statement(*, lat: float, lng: float, radius_meters: float, limit: int) -> Select:
+    """Build the ORM select for current-generation nearby Route Candidates."""
+    user_point = cast(func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326), Geography)
+    distance = func.min(func.ST_Distance(RouteSegmentRecord.geom, user_point)).label("distance_meters")
+    return (
+        select(
+            RouteRecord.id.label("route_id"),
+            DatasetRouteVersionRecord.route_version_id.label("route_version_id"),
+            RouteRecord.code.label("route_code"),
+            RouteRecord.name.label("route_name"),
+            distance,
+        )
+        .select_from(DatasetPointerRecord)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.generation_id == DatasetPointerRecord.generation_id,
+        )
+        .join(RouteRecord, RouteRecord.id == DatasetRouteVersionRecord.route_id)
+        .join(
+            RouteSegmentRecord,
+            RouteSegmentRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
+        )
+        .where(
+            DatasetPointerRecord.role == "current",
+            func.ST_DWithin(RouteSegmentRecord.geom, user_point, radius_meters),
+        )
+        .group_by(
+            RouteRecord.id,
+            DatasetRouteVersionRecord.route_version_id,
+            RouteRecord.code,
+            RouteRecord.name,
+        )
+        .order_by(distance.asc(), RouteRecord.code.asc(), RouteRecord.name.asc(), RouteRecord.id.asc())
+        .limit(limit)
+    )
+
+
+def current_route_version_statement(*, route_id: str) -> Select:
+    """Build the ORM select for the current-generation route version id."""
+    return (
+        select(DatasetRouteVersionRecord.route_version_id)
+        .select_from(DatasetRouteVersionRecord)
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(DatasetRouteVersionRecord.route_id == route_id)
+    )
+
+
+def direction_choices_statement(*, route_version_id: str) -> Select:
+    """Build the ORM select for selectable Direction Choices on current."""
+    return (
+        select(
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteDirectionRecord.sequence,
+            RouteDirectionRecord.name,
+            RouteDirectionRecord.direction_kind,
+        )
+        .select_from(RouteDirectionRecord)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
+        )
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(RouteDirectionRecord.route_version_id == route_version_id)
+        .order_by(RouteDirectionRecord.sequence.asc())
+    )
+
+
+def departure_labels_statement(*, route_version_id: str) -> Select:
+    """Build the ORM select for public departure labels on current directions."""
+    return (
+        select(
+            ServiceDirectionRecord.route_direction_id,
+            ServiceDirectionRecord.departure_label,
+        )
+        .select_from(ServiceDirectionRecord)
+        .join(RouteDirectionRecord, RouteDirectionRecord.id == ServiceDirectionRecord.route_direction_id)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
+        )
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(
+            ServiceDirectionRecord.route_direction_id.is_not(None),
+            ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
+            RouteDirectionRecord.route_version_id == route_version_id,
+        )
+        .order_by(RouteDirectionRecord.sequence.asc(), ServiceDirectionRecord.sequence.asc())
+    )
+
+
+def direction_hints_statement(*, version_ids: list[str]) -> Select:
+    """Build the ORM select for Route Candidate direction hints on current."""
+    return (
+        select(
+            RouteDirectionRecord.route_version_id,
+            ServiceDirectionRecord.departure_label,
+        )
+        .select_from(ServiceDirectionRecord)
+        .join(RouteDirectionRecord, RouteDirectionRecord.id == ServiceDirectionRecord.route_direction_id)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
+        )
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(
+            ServiceDirectionRecord.route_direction_id.is_not(None),
+            ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
+            RouteDirectionRecord.route_version_id.in_(version_ids),
+        )
+        .order_by(
+            RouteDirectionRecord.route_version_id.asc(),
+            RouteDirectionRecord.sequence.asc(),
+            ServiceDirectionRecord.sequence.asc(),
+        )
+    )
+
+
+def route_direction_membership_statement(*, route_version_id: str, route_direction_id: str) -> Select:
+    """Build the ORM select for current-generation direction membership."""
+    return (
+        select(RouteDirectionRecord.id)
+        .select_from(RouteDirectionRecord)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
+        )
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(
+            RouteDirectionRecord.route_version_id == route_version_id,
+            RouteDirectionRecord.id == route_direction_id,
+        )
+    )
+
+
+def current_route_segments_statement(*, route_version_id: str, route_direction_id: str) -> Select:
+    """Build the ORM select for ordered current-generation route segments."""
+    return (
+        select(
+            RouteSegmentRecord.public_id,
+            RouteSegmentRecord.sequence,
+            RouteSegmentRecord.geometry,
+            RouteSegmentRecord.bearing_degrees,
+            RouteSegmentRecord.distance_meters,
+            RouteSegmentRecord.cumulative_distance_meters,
+        )
+        .select_from(RouteSegmentRecord)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.route_version_id == RouteSegmentRecord.route_version_id,
+        )
+        .join(
+            DatasetPointerRecord,
+            and_(
+                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+                DatasetPointerRecord.role == "current",
+            ),
+        )
+        .where(
+            RouteSegmentRecord.route_version_id == route_version_id,
+            RouteSegmentRecord.route_direction_id == route_direction_id,
+        )
+        .order_by(RouteSegmentRecord.sequence.asc())
+    )
+
+
 def search_route_candidates(
-    connection: psycopg.Connection,
+    session: Session,
     *,
     query: str,
     limit: int,
 ) -> tuple[RouteCandidateRow, ...]:
     """Return current-generation Route Candidates matching code or name."""
-    pattern = f"%{query}%"
-    with connection.cursor(row_factory=dict_row) as cursor:
-        rows = cursor.execute(_SEARCH_SQL, {"pattern": pattern, "limit": limit}).fetchall()
+    rows = session.execute(search_route_candidates_statement(query=query, limit=limit)).mappings().all()
     version_ids = [str(row["route_version_id"]) for row in rows]
-    hints_by_version = _direction_hints_by_version(connection, version_ids)
+    hints_by_version = _direction_hints_by_version(session, version_ids)
     return tuple(
         RouteCandidateRow(
             route_id=str(row["route_id"]),
@@ -207,7 +293,7 @@ def search_route_candidates(
 
 
 def find_nearby_route_candidates(
-    connection: psycopg.Connection,
+    session: Session,
     *,
     lat: float,
     lng: float,
@@ -215,13 +301,20 @@ def find_nearby_route_candidates(
     limit: int,
 ) -> tuple[RouteCandidateRow, ...]:
     """Return current-generation nearby Route Candidates with PostGIS geography distance."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        rows = cursor.execute(
-            _NEARBY_CANDIDATE_SQL,
-            {"lat": lat, "lng": lng, "radius": radius_meters, "limit": limit},
-        ).fetchall()
+    rows = (
+        session.execute(
+            nearby_route_candidates_statement(
+                lat=lat,
+                lng=lng,
+                radius_meters=radius_meters,
+                limit=limit,
+            )
+        )
+        .mappings()
+        .all()
+    )
     version_ids = [str(row["route_version_id"]) for row in rows]
-    hints_by_version = _direction_hints_by_version(connection, version_ids)
+    hints_by_version = _direction_hints_by_version(session, version_ids)
     return tuple(
         RouteCandidateRow(
             route_id=str(row["route_id"]),
@@ -235,33 +328,33 @@ def find_nearby_route_candidates(
     )
 
 
-def load_current_route_version_id(connection: psycopg.Connection, route_id: str) -> str | None:
+def load_current_route_version_id(session: Session, route_id: str) -> str | None:
     """Return the current-generation route version id for a route, if any."""
-    row = connection.execute(_CURRENT_VERSION_SQL, {"route_id": route_id}).fetchone()
+    row = session.execute(current_route_version_statement(route_id=route_id)).first()
     return None if row is None else str(row[0])
 
 
 def load_direction_choices(
-    connection: psycopg.Connection,
+    session: Session,
     *,
     route_version_id: str,
 ) -> tuple[DirectionChoiceRow, ...]:
     """Return selectable Direction Choices for a current-generation route version."""
-    directions = connection.execute(_DIRECTION_CHOICES_SQL, {"route_version_id": route_version_id}).fetchall()
+    directions = session.execute(direction_choices_statement(route_version_id=route_version_id)).all()
     labels_by_direction: dict[str, list[str]] = {}
-    for direction_id, label in connection.execute(_DEPARTURE_LABELS_SQL, {"route_version_id": route_version_id}):
+    for direction_id, label in session.execute(departure_labels_statement(route_version_id=route_version_id)):
         bucket = labels_by_direction.setdefault(str(direction_id), [])
-        text = str(label)
-        if text not in bucket:
-            bucket.append(text)
+        text_label = str(label)
+        if text_label not in bucket:
+            bucket.append(text_label)
 
     rows = [
         DirectionChoiceRow(
-            route_direction_id=str(row[0]),
-            sequence=int(row[1]),
-            name=str(row[2]),
-            direction_kind=None if row[3] is None else str(row[3]),
-            departure_labels=tuple(labels_by_direction.get(str(row[0]), [])),
+            route_direction_id=str(row.route_direction_id),
+            sequence=int(row.sequence),
+            name=str(row.name),
+            direction_kind=None if row.direction_kind is None else str(row.direction_kind),
+            departure_labels=tuple(labels_by_direction.get(str(row.route_direction_id), [])),
         )
         for row in directions
     ]
@@ -271,53 +364,57 @@ def load_direction_choices(
 
 
 def route_direction_belongs_to_version(
-    connection: psycopg.Connection,
+    session: Session,
     *,
     route_version_id: str,
     route_direction_id: str,
 ) -> bool:
     """Return whether the direction belongs to the current-generation route version."""
-    row = connection.execute(
-        _DIRECTION_MEMBERSHIP_SQL,
-        {"route_version_id": route_version_id, "route_direction_id": route_direction_id},
-    ).fetchone()
+    row = session.execute(
+        route_direction_membership_statement(
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        )
+    ).first()
     return row is not None
 
 
 def load_current_route_segments(
-    connection: psycopg.Connection,
+    session: Session,
     *,
     route_version_id: str,
     route_direction_id: str,
 ) -> tuple[RouteSegmentRow, ...]:
     """Return ordered current-generation route segments for one direction choice."""
-    rows = connection.execute(
-        _SEGMENTS_SQL,
-        {"route_version_id": route_version_id, "route_direction_id": route_direction_id},
-    ).fetchall()
+    rows = session.execute(
+        current_route_segments_statement(
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        )
+    ).all()
     return tuple(
         RouteSegmentRow(
-            public_id=str(row[0]),
-            sequence=int(row[1]),
-            geometry=str(row[2]),
-            bearing_degrees=float(row[3]),
-            distance_meters=float(row[4]),
-            cumulative_distance_meters=float(row[5]),
+            public_id=str(row.public_id),
+            sequence=int(row.sequence),
+            geometry=str(row.geometry),
+            bearing_degrees=float(row.bearing_degrees),
+            distance_meters=float(row.distance_meters),
+            cumulative_distance_meters=float(row.cumulative_distance_meters),
         )
         for row in rows
     )
 
 
 def _direction_hints_by_version(
-    connection: psycopg.Connection,
+    session: Session,
     version_ids: list[str],
 ) -> dict[str, tuple[str, ...]]:
     if not version_ids:
         return {}
     hints: dict[str, list[str]] = {version_id: [] for version_id in version_ids}
-    for version_id, label in connection.execute(_HINTS_SQL, {"version_ids": version_ids}):
+    for version_id, label in session.execute(direction_hints_statement(version_ids=version_ids)):
         bucket = hints.setdefault(str(version_id), [])
-        text = str(label)
-        if text not in bucket:
-            bucket.append(text)
+        text_label = str(label)
+        if text_label not in bucket:
+            bucket.append(text_label)
     return {version_id: tuple(labels) for version_id, labels in hints.items()}

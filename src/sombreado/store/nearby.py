@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import psycopg
+from sqlalchemy.orm import Session
 
 from sombreado.store.discovery import find_nearby_route_candidates
 
@@ -17,7 +17,7 @@ class NearbyRoute:
 
 
 def find_nearby_routes(
-    connection: psycopg.Connection,
+    session: Session,
     *,
     lat: float,
     lng: float,
@@ -25,7 +25,7 @@ def find_nearby_routes(
 ) -> tuple[NearbyRoute, ...]:
     """Return current-generation nearby routes using PostGIS geography ST_DWithin."""
     candidates = find_nearby_route_candidates(
-        connection,
+        session,
         lat=lat,
         lng=lng,
         radius_meters=radius_meters,

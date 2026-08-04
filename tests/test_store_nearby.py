@@ -13,9 +13,9 @@ def test_nearby_reads_only_current_and_includes_on_route_point(store: Generation
     store.publish("gen-a")
 
     # Point on the first sample segment (PostGIS geography distance ≈ 0).
-    with store.connection() as connection:
+    with store.session() as session:
         results = find_nearby_routes(
-            connection,
+            session,
             lat=-27.58967541174793,
             lng=-48.53426644737102,
             radius_meters=50,
@@ -31,9 +31,9 @@ def test_nearby_excludes_routes_outside_radius(store: GenerationStore):
     store.validate("gen-a")
     store.publish("gen-a")
 
-    with store.connection() as connection:
+    with store.session() as session:
         results = find_nearby_routes(
-            connection,
+            session,
             lat=-27.0,
             lng=-48.0,
             radius_meters=10,
@@ -48,9 +48,9 @@ def test_nearby_ignores_staging_generation(store: GenerationStore):
     store.publish("gen-a")
     store.stage("gen-b", sample_generation_rows(generation_suffix="b"))
 
-    with store.connection() as connection:
+    with store.session() as session:
         results = find_nearby_routes(
-            connection,
+            session,
             lat=-27.58967541174793,
             lng=-48.53426644737102,
             radius_meters=50,
@@ -86,7 +86,7 @@ def test_nearby_skips_candidates_with_missing_distance(store: GenerationStore, m
         ),
     )
 
-    with store.connection() as connection:
-        results = find_nearby_routes(connection, lat=-27.6, lng=-48.5, radius_meters=50)
+    with store.session() as session:
+        results = find_nearby_routes(session, lat=-27.6, lng=-48.5, radius_meters=50)
 
     assert results == (nearby_module.NearbyRoute(route_code="110", route_name="Keep", distance_meters=12.5),)

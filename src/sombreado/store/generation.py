@@ -11,6 +11,9 @@ from urllib.parse import urlparse, urlunparse
 import psycopg
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
 from sombreado.store.generation_writes import (
     CanonicalRows,
@@ -66,6 +69,7 @@ class GenerationStore:
         if not database_url.strip():
             raise ValueError("DATABASE_URL must be non-empty")
         self.database_url = database_url.strip()
+        self._engine: Engine | None = None
 
     def migrate(self) -> None:
         """Apply Alembic versioned migrations up to head for this database."""
@@ -373,3 +377,15 @@ class GenerationStore:
             yield connection
         finally:
             connection.close()
+
+    def engine(self) -> Engine:
+        """Return a cached SQLAlchemy engine for ORM passenger reads."""
+        if self._engine is None:
+            self._engine = create_engine(sqlalchemy_database_url(self.database_url), pool_pre_ping=True)
+        return self._engine
+
+    @contextmanager
+    def session(self) -> Iterator[Session]:
+        """Open a SQLAlchemy session for ORM passenger reads over `current`."""
+        with Session(self.engine()) as session:
+            yield session
