@@ -2,14 +2,19 @@
 
 ## Status
 
-Superseded for passenger reads by the Generation Store SQLite path. Kept for historical PostGIS `RouteReadService` code until that module is deleted.
+Accepted for Neon/PostGIS Generation Store passenger reads.
 
-## Historical decision
+## Decision
 
-Sombreado Service read queries used SQLAlchemy ORM/Core expressions instead of textual SQL while the service was read-only over scraper-owned PostGIS tables. Pydantic remained the API/read DTO validation boundary.
+Passenger reads of the Neon **Generation Store** `current` pointer use **full SQLAlchemy ORM** mapped models.
 
-Mapped SQLAlchemy classes represented database records. API response models and read DTOs stayed separate from ORM mappings.
+- SQLAlchemy expressions / `func` are allowed for PostGIS (for example `ST_DWithin` / geography). Raw SQL strings are not the default passenger-read style.
+- **Pydantic** remains the API / DTO boundary; ORM mappings are not public browser schemas.
+- There is **no dual SQLite passenger-read path**.
 
-## Current passenger reads
+## Consequences
 
-Passenger Route Discovery, Direction Choices, Route Geometry, and Advice read the Generation Store through parameterized SQLite SQL in `sombreado.store` (for example `discovery.py`). Do not reintroduce PostGIS / SQLAlchemy passenger reads. New passenger-facing store reads should stay on the SQLite `current` pointer seam.
+- `sombreado.store.models` maps the Generation Store schema (`dataset_pointers`, `dataset_route_versions`, geography `geom`, and related tables).
+- **Route Discovery** and **Direction Choices** queries are ORM selects in `sombreado.store.discovery`, served through `CurrentRouteReadService`.
+- Segment / membership helpers used by geometry and advice also read `current` via ORM; endpoint cutover for geometry and advice remains tracked separately.
+- The historical scraper-owned PostGIS `RouteReadService` framing is retired; do not reintroduce `is_current`-flag passenger reads over scraper tables.

@@ -261,19 +261,19 @@ def test_store_geometry_reads_current_segments_and_membership(store: GenerationS
     version_id = _id("version-a")
     direction_ida = _id("direction-a-ida")
 
-    with store.connection() as connection:
+    with store.session() as session:
         assert route_direction_belongs_to_version(
-            connection,
+            session,
             route_version_id=version_id,
             route_direction_id=direction_ida,
         )
         assert not route_direction_belongs_to_version(
-            connection,
+            session,
             route_version_id=version_id,
             route_direction_id=_id("direction-missing"),
         )
         segments = load_current_route_segments(
-            connection,
+            session,
             route_version_id=version_id,
             route_direction_id=direction_ida,
         )

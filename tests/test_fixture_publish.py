@@ -18,9 +18,9 @@ def test_publish_demo_fixture_sets_current_readable_via_store(database_url: str)
     assert published_id == "demo-1"
     assert store.current_generation() == "demo-1"
     assert store.current_route_version_ids()
-    with store.connection() as connection:
+    with store.session() as session:
         nearby = find_nearby_routes(
-            connection,
+            session,
             lat=-27.58967541174793,
             lng=-48.53426644737102,
             radius_meters=50,
