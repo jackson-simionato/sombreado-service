@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from geoalchemy2 import Geography
-from sqlalchemy import and_, cast, func, or_, select
+from sqlalchemy import ColumnElement, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
@@ -50,6 +50,14 @@ class RouteSegmentRow:
     cumulative_distance_meters: float
 
 
+def _current_pointer_join() -> ColumnElement[bool]:
+    """Join predicate: dataset membership is visible via the `current` pointer."""
+    return and_(
+        DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
+        DatasetPointerRecord.role == "current",
+    )
+
+
 def search_route_candidates_statement(*, query: str, limit: int) -> Select:
     """Build the ORM select for current-generation Route Candidate search."""
     pattern = f"%{query}%"
@@ -62,13 +70,7 @@ def search_route_candidates_statement(*, query: str, limit: int) -> Select:
         )
         .select_from(RouteRecord)
         .join(DatasetRouteVersionRecord, DatasetRouteVersionRecord.route_id == RouteRecord.id)
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(or_(RouteRecord.code.ilike(pattern), RouteRecord.name.ilike(pattern)))
         .order_by(RouteRecord.code.asc(), RouteRecord.name.asc())
         .limit(limit)
@@ -87,20 +89,14 @@ def nearby_route_candidates_statement(*, lat: float, lng: float, radius_meters: 
             RouteRecord.name.label("route_name"),
             distance,
         )
-        .select_from(DatasetPointerRecord)
-        .join(
-            DatasetRouteVersionRecord,
-            DatasetRouteVersionRecord.generation_id == DatasetPointerRecord.generation_id,
-        )
+        .select_from(DatasetRouteVersionRecord)
+        .join(DatasetPointerRecord, _current_pointer_join())
         .join(RouteRecord, RouteRecord.id == DatasetRouteVersionRecord.route_id)
         .join(
             RouteSegmentRecord,
             RouteSegmentRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
         )
-        .where(
-            DatasetPointerRecord.role == "current",
-            func.ST_DWithin(RouteSegmentRecord.geom, user_point, radius_meters),
-        )
+        .where(func.ST_DWithin(RouteSegmentRecord.geom, user_point, radius_meters))
         .group_by(
             RouteRecord.id,
             DatasetRouteVersionRecord.route_version_id,
@@ -117,13 +113,7 @@ def current_route_version_statement(*, route_id: str) -> Select:
     return (
         select(DatasetRouteVersionRecord.route_version_id)
         .select_from(DatasetRouteVersionRecord)
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(DatasetRouteVersionRecord.route_id == route_id)
     )
 
@@ -142,13 +132,7 @@ def direction_choices_statement(*, route_version_id: str) -> Select:
             DatasetRouteVersionRecord,
             DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
         )
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(RouteDirectionRecord.route_version_id == route_version_id)
         .order_by(RouteDirectionRecord.sequence.asc())
     )
@@ -167,13 +151,7 @@ def departure_labels_statement(*, route_version_id: str) -> Select:
             DatasetRouteVersionRecord,
             DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
         )
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(
             ServiceDirectionRecord.route_direction_id.is_not(None),
             ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
@@ -196,13 +174,7 @@ def direction_hints_statement(*, version_ids: list[str]) -> Select:
             DatasetRouteVersionRecord,
             DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
         )
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(
             ServiceDirectionRecord.route_direction_id.is_not(None),
             ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
@@ -225,13 +197,7 @@ def route_direction_membership_statement(*, route_version_id: str, route_directi
             DatasetRouteVersionRecord,
             DatasetRouteVersionRecord.route_version_id == RouteDirectionRecord.route_version_id,
         )
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(
             RouteDirectionRecord.route_version_id == route_version_id,
             RouteDirectionRecord.id == route_direction_id,
@@ -255,13 +221,7 @@ def current_route_segments_statement(*, route_version_id: str, route_direction_i
             DatasetRouteVersionRecord,
             DatasetRouteVersionRecord.route_version_id == RouteSegmentRecord.route_version_id,
         )
-        .join(
-            DatasetPointerRecord,
-            and_(
-                DatasetPointerRecord.generation_id == DatasetRouteVersionRecord.generation_id,
-                DatasetPointerRecord.role == "current",
-            ),
-        )
+        .join(DatasetPointerRecord, _current_pointer_join())
         .where(
             RouteSegmentRecord.route_version_id == route_version_id,
             RouteSegmentRecord.route_direction_id == route_direction_id,
