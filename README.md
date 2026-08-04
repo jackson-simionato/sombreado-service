@@ -91,7 +91,7 @@ Hard failure of a still-listed route exits non-zero and leaves the last good `cu
 
 ## Production (Render Free + Neon)
 
-Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (ADR 0005).
+Production target is **Render Free** for the passenger API and **Neon Free Postgres/PostGIS** for the Generation Store (ADR 0005). Cutover overwrites the existing Render Free service in place; frontend `NEXT_PUBLIC_API_URL` stays unchanged (ADR 0009).
 
 ### Runtime Secrets vs Pipeline Secrets
 
@@ -105,6 +105,14 @@ After CI passes on `main`, `.github/workflows/ci.yml` calls the Render Deploy Ho
 Scheduled scrape is `.github/workflows/scrape.yml`: daily `schedule` (off-peak `America/Sao_Paulo`) plus `workflow_dispatch`. Set the Neon writer URL as the Actions repository secret `DATABASE_URL` (Pipeline Secret). The Render web service does not need scrape writer credentials for this job, and scrape is not a Render cron/worker/one-off. A failed scrape after the CLI’s one automatic retry fails the Actions job so repo watchers get the default failure notification. Use `workflow_dispatch` with `force=true` only for lease/staging recovery.
 
 Recovery beyond Neon’s short PITR window is a fresh scrape (ADR 0008). `sombreado-scrape backup` / `restore` and Object Storage are parked and are not the production backup path.
+
+### Cutover / scraper retirement (ADR 0009)
+
+1. Neon schema + fresh Actions scrape publishes validated `current`.
+2. Acceptance (contract suite + Floripa smoke) against the Neon-backed artifact before overwrite.
+3. Overwrite-deploy to the existing Render Free service; stop standalone `consorcio-fenix-scraper` writes immediately at flip.
+4. Hold old scraper PostGIS ~48h idle for emergency redeploy only; then destroy with no archive dump.
+5. Archive/delete `consorcio-fenix-scraper` only when ADR 0009 retire-when conditions hold.
 
 ### Parked: Oracle Always Free VM
 

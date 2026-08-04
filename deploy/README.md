@@ -14,3 +14,4 @@ Production (ADR 0005):
 Do not treat `bootstrap-vm.sh`, `sombreado-deploy-release`, or the systemd
 timers (including `sombreado-backup.*`) as the current Generation Store or
 backup path. Object Storage / offline backup is parked for v1 (ADR 0008).
+Overwrite cutover onto Neon and scraper retirement follow ADR 0009.
