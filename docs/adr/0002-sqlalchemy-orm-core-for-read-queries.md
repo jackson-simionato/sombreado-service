@@ -15,6 +15,6 @@ Passenger reads of the Neon **Generation Store** `current` pointer use **full SQ
 ## Consequences
 
 - `sombreado.store.models` maps the Generation Store schema (`dataset_pointers`, `dataset_route_versions`, geography `geom`, and related tables).
-- **Route Discovery** and **Direction Choices** queries are ORM selects in `sombreado.store.discovery`, served through `CurrentRouteReadService`.
-- Segment / membership helpers used by geometry and advice also read `current` via ORM; endpoint cutover for geometry and advice remains tracked separately.
+- **Route Discovery**, **Direction Choices**, **Route Geometry**, and **Advice** queries are ORM selects in `sombreado.store.discovery`, served through `CurrentRouteReadService`.
+- Segment and direction-membership helpers for geometry and advice read only the `current` pointer via ORM; there is no dual SQLite passenger-read path.
 - The historical scraper-owned PostGIS `RouteReadService` framing is retired; do not reintroduce `is_current`-flag passenger reads over scraper tables.
