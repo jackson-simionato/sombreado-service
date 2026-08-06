@@ -17,8 +17,8 @@ Production topology is:
 
 | Kind | Where | Examples |
 | --- | --- | --- |
-| **Runtime Secret** | Render service env | Neon `DATABASE_URL` (or equivalent) needed by the passenger API process |
-| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL`; Neon writer `DATABASE_URL` for scrape |
+| **Runtime Secret** | Render service env | Neon pooled `DATABASE_URL` for the passenger API; optional direct `DATABASE_URL_UNPOOLED` for migrate (ADR 0006) |
+| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL`; Neon pooled writer `DATABASE_URL` for scrape |
 
 Do not place the Deploy Hook URL on Render. Do not require scrape writer credentials on the Render web service for the Actions scrape job. Duplicate a Neon URL into both stores only when both runtimes need it; rotate each surface independently.
 
