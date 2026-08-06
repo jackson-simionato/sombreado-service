@@ -15,7 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from sombreado.config import Settings
+from sombreado.config import get_settings
 from sombreado.store.generation_writes import (
     CanonicalRows,
     apply_generation_routes,
@@ -77,7 +77,7 @@ class GenerationStore:
         """
         migrate_url = resolve_migration_database_url(
             self.database_url,
-            unpooled_url=Settings().database_url_unpooled,
+            unpooled_url=get_settings().database_url_unpooled,
         )
         config = Config(str(_ALEMBIC_INI))
         config.set_main_option("sqlalchemy.url", sqlalchemy_database_url(migrate_url))

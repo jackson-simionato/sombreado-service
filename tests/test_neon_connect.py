@@ -23,6 +23,20 @@ def test_resolve_migration_database_url_prefers_unpooled_env(monkeypatch: pytest
     assert resolve_migration_database_url("postgresql://store/db") == "postgresql://direct/db"
 
 
+def test_resolve_migration_database_url_prefers_explicit_unpooled_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DATABASE_URL_UNPOOLED", "postgresql://env-direct/db")
+
+    assert (
+        resolve_migration_database_url(
+            "postgresql://store/db",
+            unpooled_url="postgresql://arg-direct/db",
+        )
+        == "postgresql://arg-direct/db"
+    )
+
+
 def test_resolve_migration_database_url_falls_back_to_app_url(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DATABASE_URL_UNPOOLED", raising=False)
 
@@ -67,6 +81,7 @@ async def test_async_get_engine_uses_null_pool(monkeypatch: pytest.MonkeyPatch, 
 
 def test_migrate_uses_unpooled_url_when_set(database_url: str, monkeypatch: pytest.MonkeyPatch):
     """Alembic DDL should hit Neon direct when DATABASE_URL_UNPOOLED is set."""
+    get_settings.cache_clear()
     monkeypatch.setenv("DATABASE_URL_UNPOOLED", database_url)
     store = GenerationStore("postgresql://unused:unused@127.0.0.1:1/unused")
     store.migrate()
