@@ -15,6 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from sombreado.config import Settings
 from sombreado.store.generation_writes import (
     CanonicalRows,
     apply_generation_routes,
@@ -24,6 +25,11 @@ from sombreado.store.generation_writes import (
     pointer,
     validate_export_shape,
     validate_generation,
+)
+from sombreado.store.neon_connect import (
+    resolve_migration_database_url,
+    sqlalchemy_database_url,
+    sqlalchemy_neon_engine_kwargs,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -41,14 +47,6 @@ __all__ = [
 
 class ScrapeLeaseHeldError(RuntimeError):
     """Raised when another scrape holder still owns the DB lease."""
-
-
-def sqlalchemy_database_url(database_url: str) -> str:
-    """Normalize a Postgres DSN for SQLAlchemy's psycopg3 dialect."""
-    parsed = urlparse(database_url)
-    if parsed.scheme in {"postgresql", "postgres"}:
-        return urlunparse(parsed._replace(scheme="postgresql+psycopg"))
-    return database_url
 
 
 def redacted_database_url(database_url: str) -> str:
@@ -72,11 +70,19 @@ class GenerationStore:
         self._engine: Engine | None = None
 
     def migrate(self) -> None:
-        """Apply Alembic versioned migrations up to head for this database."""
+        """Apply Alembic versioned migrations up to head for this database.
+
+        Prefer ``DATABASE_URL_UNPOOLED`` (Neon direct) when set so DDL does not
+        run through PgBouncer transaction pooling (ADR 0006).
+        """
+        migrate_url = resolve_migration_database_url(
+            self.database_url,
+            unpooled_url=Settings().database_url_unpooled,
+        )
         config = Config(str(_ALEMBIC_INI))
-        config.set_main_option("sqlalchemy.url", sqlalchemy_database_url(self.database_url))
-        # Prefer this store URL over ambient DATABASE_URL in migrations/env.py.
-        config.attributes["database_url"] = self.database_url
+        config.set_main_option("sqlalchemy.url", sqlalchemy_database_url(migrate_url))
+        # Prefer this migrate URL over ambient DATABASE_URL in migrations/env.py.
+        config.attributes["database_url"] = migrate_url
         command.upgrade(config, "head")
 
     def claim_scrape_lease(
@@ -373,7 +379,11 @@ class GenerationStore:
 
     @contextmanager
     def connection(self) -> Iterator[psycopg.Connection]:
-        """Open a Postgres connection for Generation Store work."""
+        """Open a Postgres connection for Generation Store work.
+
+        Open/close per call (no client pool) against the configured DSN — pooled
+        Neon URL in production scrape/API writers (ADR 0006).
+        """
         connection = psycopg.connect(self.database_url)
         try:
             yield connection
@@ -381,9 +391,15 @@ class GenerationStore:
             connection.close()
 
     def engine(self) -> Engine:
-        """Return a cached SQLAlchemy engine for ORM passenger reads."""
+        """Return a cached SQLAlchemy engine for ORM passenger reads.
+
+        Uses ``NullPool`` against the Neon pooled DSN (ADR 0006).
+        """
         if self._engine is None:
-            self._engine = create_engine(sqlalchemy_database_url(self.database_url), pool_pre_ping=True)
+            self._engine = create_engine(
+                sqlalchemy_database_url(self.database_url),
+                **sqlalchemy_neon_engine_kwargs(),
+            )
         return self._engine
 
     @contextmanager
