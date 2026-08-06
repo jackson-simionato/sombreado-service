@@ -13,11 +13,15 @@ from sombreado.store.object_storage import (
 
 
 class Settings(BaseSettings):
-    # Ignore Neon-managed extras from `neon env pull` (e.g. NEON_BRANCH, DATABASE_URL_UNPOOLED).
+    # Ignore Neon-managed extras from `neon env pull` (e.g. NEON_BRANCH).
+    # DATABASE_URL_UNPOOLED is accepted for Alembic DDL (ADR 0006).
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Neon/PostGIS Generation Store DSN (Runtime Secret). Required for API/CLI via require_*.
+    # Production: Neon pooled host (hostname contains `-pooler`). See ADR 0006.
     database_url: str = ""
+    # Optional Neon direct (unpooled) DSN for Alembic DDL. From `neon env pull`.
+    database_url_unpooled: str = ""
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )

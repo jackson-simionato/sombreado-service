@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from sombreado.config import get_settings
+from sombreado.store.neon_connect import sqlalchemy_database_url, sqlalchemy_neon_engine_kwargs
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -19,7 +20,10 @@ def get_engine() -> AsyncEngine:
         database_url = get_settings().database_url.strip()
         if not database_url:
             raise ValueError("DATABASE_URL must be non-empty for async SQLAlchemy sessions")
-        _engine = create_async_engine(database_url, pool_pre_ping=True)
+        _engine = create_async_engine(
+            sqlalchemy_database_url(database_url),
+            **sqlalchemy_neon_engine_kwargs(),
+        )
     return _engine
 
 

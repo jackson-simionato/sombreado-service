@@ -166,7 +166,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - A **Seat-area Recommendation** is produced by **Advice** and is not derived by the browser client.
 - A **Render Deployment** runs the passenger API; scrape publishes against Neon from GitHub Actions.
 - A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it (deploy hook / Neon writer credentials).
-- A **Runtime Secret** belongs on Render when the API process needs it (`DATABASE_URL` to Neon).
+- A **Runtime Secret** belongs on Render when the API process needs it (Neon pooled `DATABASE_URL`; optional direct `DATABASE_URL_UNPOOLED` for migrate).
 
 ## Example dialogue
 
@@ -206,7 +206,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
 - Cutover is overwrite-in-place on Render Free (ADR 0009): frontend `NEXT_PUBLIC_API_URL` unchanged; scraper PostGIS is idle-hold then destroy, not a warm dual-Render rollback host.
 - "deploy" means CI on `main` then Render Deploy Hook for the API; scrape is Actions-only against Neon — not Oracle VM rsync or co-located scrape on the web service.
-- `DATABASE_URL` is the passenger API and scrape CLI Generation Store setting; `SQLITE_DATABASE_PATH` is not the production store path.
+- `DATABASE_URL` is the passenger API and scrape CLI Generation Store setting (Neon pooled host in production); optional `DATABASE_URL_UNPOOLED` is the Neon direct DSN for Alembic; `SQLITE_DATABASE_PATH` is not the production store path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.
 - "pagination" means **Route Candidate Limit** only, not offset or cursor pagination.

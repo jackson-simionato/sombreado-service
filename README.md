@@ -97,12 +97,20 @@ Production target is **Render Free** for the passenger API and **Neon Free Postg
 
 | Kind | Where | Secrets |
 | --- | --- | --- |
-| **Runtime Secret** | Render web service env | `DATABASE_URL` (Neon) for the passenger API |
-| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL` (CI deploy); `DATABASE_URL` (Neon writer for scrape) |
+| **Runtime Secret** | Render web service env | `DATABASE_URL` (Neon **pooled**); optional `DATABASE_URL_UNPOOLED` (Neon **direct**, for container migrate) |
+| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL` (CI deploy); `DATABASE_URL` (Neon **pooled** writer for scrape); optional `DATABASE_URL_UNPOOLED` if Actions runs migrate |
+
+#### Neon `DATABASE_URL` shape (ADR 0006)
+
+From the Neon Console **Connect** dialog (or `neon env pull`):
+
+1. Paste the **pooled** connection string (hostname contains `-pooler`, e.g. `ep-example-pooler.region.aws.neon.tech`) into Render Runtime Secret `DATABASE_URL` and the Actions scrape secret `DATABASE_URL`.
+2. Paste the **direct** / unpooled connection string into `DATABASE_URL_UNPOOLED` on Render (and Actions if you migrate there). Alembic DDL prefers this direct DSN; app/scrape traffic stays on the pooled URL.
+3. SQLAlchemy uses `NullPool` + `pool_pre_ping` against the pooled DSN — do not point app engines at a large client-side pool.
 
 After CI passes on `main`, `.github/workflows/ci.yml` calls the Render Deploy Hook (`RENDER_DEPLOY_HOOK_URL`, optionally skipped with `ALLOW_SKIP_DEPLOY=1`). Do not put the Deploy Hook URL on Render.
 
-Scheduled scrape is `.github/workflows/scrape.yml`: daily `schedule` (off-peak `America/Sao_Paulo`) plus `workflow_dispatch`. Set the Neon writer URL as the Actions repository secret `DATABASE_URL` (Pipeline Secret). The Render web service does not need scrape writer credentials for this job, and scrape is not a Render cron/worker/one-off. A failed scrape after the CLI’s one automatic retry fails the Actions job so repo watchers get the default failure notification. Use `workflow_dispatch` with `force=true` only for lease/staging recovery.
+Scheduled scrape is `.github/workflows/scrape.yml`: daily `schedule` (off-peak `America/Sao_Paulo`) plus `workflow_dispatch`. Set the Neon **pooled** writer URL as the Actions repository secret `DATABASE_URL` (Pipeline Secret). The Render web service does not need scrape writer credentials for this job, and scrape is not a Render cron/worker/one-off. A failed scrape after the CLI’s one automatic retry fails the Actions job so repo watchers get the default failure notification. Use `workflow_dispatch` with `force=true` only for lease/staging recovery.
 
 Recovery beyond Neon’s short PITR window is a fresh scrape (ADR 0008). `sombreado-scrape backup` / `restore` and Object Storage are parked and are not the production backup path.
 
