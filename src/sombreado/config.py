@@ -5,19 +5,17 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from sombreado.store.object_storage import (
-    DirectoryObjectStorage,
-    ObjectStorage,
-    S3CompatibleObjectStorage,
-)
-
 
 class Settings(BaseSettings):
-    # Ignore Neon-managed extras from `neon env pull` (e.g. NEON_BRANCH, DATABASE_URL_UNPOOLED).
+    # Ignore Neon-managed extras from `neon env pull` (e.g. NEON_BRANCH).
+    # DATABASE_URL_UNPOOLED is accepted for Alembic DDL (ADR 0006).
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Neon/PostGIS Generation Store DSN (Runtime Secret). Required for API/CLI via require_*.
+    # Production: Neon pooled host (hostname contains `-pooler`). See ADR 0006.
     database_url: str = ""
+    # Optional Neon direct (unpooled) DSN for Alembic DDL. From `neon env pull`.
+    database_url_unpooled: str = ""
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )
@@ -85,18 +83,6 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError(f"s3 object storage requires {', '.join(missing)}")
         return self
-
-    def build_object_storage(self) -> ObjectStorage:
-        """Construct the configured Object Storage backend."""
-        if self.object_storage_backend == "directory":
-            return DirectoryObjectStorage(self.object_storage_directory)
-        return S3CompatibleObjectStorage(
-            bucket=self.object_storage_s3_bucket,
-            endpoint_url=self.object_storage_s3_endpoint,
-            access_key=self.object_storage_s3_access_key,
-            secret_key=self.object_storage_s3_secret_key,
-            region=self.object_storage_s3_region,
-        )
 
 
 @lru_cache
