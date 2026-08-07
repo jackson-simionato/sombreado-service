@@ -5,12 +5,6 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from sombreado.store.object_storage import (
-    DirectoryObjectStorage,
-    ObjectStorage,
-    S3CompatibleObjectStorage,
-)
-
 
 class Settings(BaseSettings):
     # Ignore Neon-managed extras from `neon env pull` (e.g. NEON_BRANCH).
@@ -89,18 +83,6 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError(f"s3 object storage requires {', '.join(missing)}")
         return self
-
-    def build_object_storage(self) -> ObjectStorage:
-        """Construct the configured Object Storage backend."""
-        if self.object_storage_backend == "directory":
-            return DirectoryObjectStorage(self.object_storage_directory)
-        return S3CompatibleObjectStorage(
-            bucket=self.object_storage_s3_bucket,
-            endpoint_url=self.object_storage_s3_endpoint,
-            access_key=self.object_storage_s3_access_key,
-            secret_key=self.object_storage_s3_secret_key,
-            region=self.object_storage_s3_region,
-        )
 
 
 @lru_cache
