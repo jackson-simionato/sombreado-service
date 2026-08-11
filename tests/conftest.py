@@ -55,6 +55,9 @@ def database_url(_migrated_database: str) -> str:
         connection.commit()
     os.environ["DATABASE_URL"] = _migrated_database
     get_settings.cache_clear()
+    from sombreado.api.deps import get_generation_store
+
+    get_generation_store.cache_clear()
     return _migrated_database
 
 

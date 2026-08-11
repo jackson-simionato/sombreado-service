@@ -32,7 +32,7 @@ Neon exposes a **pooled** DSN (PgBouncer transaction mode; hostname contains `-p
 
 **When unpooled is required:** Alembic DDL / migrate. Scrape publish and lease work stay on the **pooled** DSN — they use ordinary transactions and transaction-scoped advisory locks, not session-mode features. Unpooled is also required for admin tools Neon documents as incompatible with transaction pooling (`pg_dump`, logical replication); those are not a v1 path (ADR 0008).
 
-SQLAlchemy app engines (`GenerationStore.engine`, async `store.db`) use `NullPool` + `pool_pre_ping=True` so the process does not double-pool against Neon PgBouncer. Scrape writers use `psycopg.connect` open/close per operation (same no-client-pool shape). Do not assume session-mode features (`LISTEN`/`NOTIFY`, session `SET`, SQL `PREPARE`) on the pooled DSN. Alembic already uses `NullPool` in `migrations/env.py`.
+SQLAlchemy app engines originally used `NullPool` + `pool_pre_ping=True` so the process does not double-pool against Neon PgBouncer. **Amended by ADR 0010:** the long-lived Render passenger API now uses a tiny client pool (`pool_size=2`) for warm-request connect reuse; Alembic migrate still uses `NullPool`. Scrape writers use `psycopg.connect` open/close per operation. Do not assume session-mode features (`LISTEN`/`NOTIFY`, session `SET`, SQL `PREPARE`) on the pooled DSN.
 
 ## Consequences
 

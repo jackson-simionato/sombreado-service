@@ -393,7 +393,7 @@ class GenerationStore:
     def engine(self) -> Engine:
         """Return a cached SQLAlchemy engine for ORM passenger reads.
 
-        Uses ``NullPool`` against the Neon pooled DSN (ADR 0006).
+        Uses a tiny client pool against the Neon pooled DSN (ADR 0010).
         """
         if self._engine is None:
             self._engine = create_engine(

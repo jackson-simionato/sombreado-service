@@ -1,19 +1,22 @@
-"""Neon Free connection / pooling lock (#83)."""
+"""Neon Free connection / pooling lock (#83, amended #93 / ADR 0010)."""
 
 import pytest
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 
+from sombreado.api.deps import get_generation_store
 from sombreado.config import Settings, get_settings
 from sombreado.store import db
 from sombreado.store.generation import GenerationStore
 from sombreado.store.neon_connect import resolve_migration_database_url, sqlalchemy_neon_engine_kwargs
 
 
-def test_sqlalchemy_neon_engine_kwargs_use_null_pool_and_pre_ping():
+def test_sqlalchemy_neon_engine_kwargs_use_tiny_pool_and_pre_ping():
     kwargs = sqlalchemy_neon_engine_kwargs()
 
-    assert kwargs["poolclass"] is NullPool
+    assert kwargs["pool_size"] == 2
+    assert kwargs["max_overflow"] == 0
     assert kwargs["pool_pre_ping"] is True
+    assert "poolclass" not in kwargs
 
 
 def test_resolve_migration_database_url_prefers_unpooled_env(monkeypatch: pytest.MonkeyPatch):
@@ -56,27 +59,44 @@ def test_settings_accept_optional_database_url_unpooled(monkeypatch: pytest.Monk
     assert not hasattr(settings, "neon_branch")
 
 
-def test_generation_store_engine_uses_null_pool(database_url: str):
-    store = GenerationStore(database_url)
+def test_generation_store_engine_uses_tiny_queue_pool():
+    store = GenerationStore("postgresql://postgres:postgres@localhost:5432/sombreado_test")
 
-    assert isinstance(store.engine().pool, NullPool)
+    assert isinstance(store.engine().pool, QueuePool)
+    assert store.engine().pool.size() == 2
+    store.engine().dispose()
 
 
 @pytest.mark.asyncio
-async def test_async_get_engine_uses_null_pool(monkeypatch: pytest.MonkeyPatch, database_url: str):
+async def test_async_get_engine_uses_tiny_queue_pool(monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
-    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/sombreado_test")
     monkeypatch.setattr(db, "_engine", None)
     monkeypatch.setattr(db, "_session_factory", None)
 
     engine = db.get_engine()
     try:
-        assert isinstance(engine.pool, NullPool)
+        assert isinstance(engine.pool, QueuePool)
+        assert engine.pool.size() == 2
     finally:
         await engine.dispose()
         get_settings.cache_clear()
         db._engine = None
         db._session_factory = None
+
+
+def test_api_generation_store_dependency_is_process_scoped(monkeypatch: pytest.MonkeyPatch):
+    get_settings.cache_clear()
+    get_generation_store.cache_clear()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/sombreado_test")
+    monkeypatch.setenv("CORS_ORIGINS", '["http://localhost:3000"]')
+
+    first = get_generation_store()
+    second = get_generation_store()
+
+    assert first is second
+    get_generation_store.cache_clear()
+    get_settings.cache_clear()
 
 
 def test_migrate_uses_unpooled_url_when_set(database_url: str, monkeypatch: pytest.MonkeyPatch):
@@ -99,3 +119,7 @@ def test_readme_documents_pooled_runtime_and_unpooled_migrate():
     assert "pooled" in text.lower()
     assert "DATABASE_URL_UNPOOLED" in text
     assert "-pooler" in text or "pooler" in text.lower()
+    assert "ADR 0010" in text
+    assert "pool_size=2" in text
+    assert "max_overflow=0" in text
+    assert "pool_pre_ping" in text
