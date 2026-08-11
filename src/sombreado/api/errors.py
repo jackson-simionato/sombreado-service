@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from sombreado.api.request_access_log import REQUEST_ID_STATE_KEY
 from sombreado.domain.errors import ServiceError
 from sombreado.logging import get_logger
 
@@ -83,7 +84,13 @@ async def validation_exception_handler(_request: Request, _exc: RequestValidatio
 
 async def unexpected_public_error_handler(request: Request, exc: Exception) -> JSONResponse:
     if request.url.path.startswith("/v1"):
-        logger.exception("Unhandled public API exception for %s", request.url.path, exc_info=exc)
+        request_id = getattr(request.state, REQUEST_ID_STATE_KEY, None)
+        logger.exception(
+            "Unhandled public API exception request_id=%s path=%s",
+            request_id,
+            request.url.path,
+            exc_info=exc,
+        )
         return public_error_response(
             status_code=503,
             code="serviceUnavailable",
