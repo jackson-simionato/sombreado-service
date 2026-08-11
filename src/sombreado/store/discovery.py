@@ -78,9 +78,24 @@ def search_route_candidates_statement(*, query: str, limit: int) -> Select:
 
 
 def nearby_route_candidates_statement(*, lat: float, lng: float, radius_meters: float, limit: int) -> Select:
-    """Build the ORM select for current-generation nearby Route Candidates."""
+    """Build the ORM select for current-generation nearby Route Candidates.
+
+    Drive from ``route_segments`` via a materialized spatial CTE so Postgres uses
+    ``route_segments_geom_gix`` once, then joins ``current`` membership (#96).
+    The previous ``FROM dataset_route_versions`` shape probed GIST once per current
+    route (~187 loops in production EXPLAIN).
+    """
     user_point = cast(func.ST_SetSRID(func.ST_MakePoint(lng, lat), 4326), Geography)
-    distance = func.min(func.ST_Distance(RouteSegmentRecord.geom, user_point)).label("distance_meters")
+    nearby_segments = (
+        select(
+            RouteSegmentRecord.route_version_id.label("route_version_id"),
+            RouteSegmentRecord.geom.label("geom"),
+        )
+        .where(func.ST_DWithin(RouteSegmentRecord.geom, user_point, radius_meters))
+        .cte("nearby_segments")
+        .prefix_with("MATERIALIZED")
+    )
+    distance = func.min(func.ST_Distance(nearby_segments.c.geom, user_point)).label("distance_meters")
     return (
         select(
             RouteRecord.id.label("route_id"),
@@ -89,14 +104,13 @@ def nearby_route_candidates_statement(*, lat: float, lng: float, radius_meters: 
             RouteRecord.name.label("route_name"),
             distance,
         )
-        .select_from(DatasetRouteVersionRecord)
+        .select_from(nearby_segments)
+        .join(
+            DatasetRouteVersionRecord,
+            DatasetRouteVersionRecord.route_version_id == nearby_segments.c.route_version_id,
+        )
         .join(DatasetPointerRecord, _current_pointer_join())
         .join(RouteRecord, RouteRecord.id == DatasetRouteVersionRecord.route_id)
-        .join(
-            RouteSegmentRecord,
-            RouteSegmentRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
-        )
-        .where(func.ST_DWithin(RouteSegmentRecord.geom, user_point, radius_meters))
         .group_by(
             RouteRecord.id,
             DatasetRouteVersionRecord.route_version_id,
