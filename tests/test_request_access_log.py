@@ -59,12 +59,14 @@ async def test_passenger_api_emits_request_access_log_for_health(caplog, monkeyp
     assert response.status_code == 200
     access_records = [record for record in caplog.records if "duration_class=" in record.getMessage()]
     assert len(access_records) == 1
+    assert access_records[0].levelno == logging.INFO
     message = access_records[0].getMessage()
     assert "method=GET" in message
     assert "path=/health/live" in message
     assert "status=200" in message
     assert "duration_ms=" in message
     assert "duration_class=" in message
+    assert "duration_class=slow" not in message
     assert "request_id=" in message
     request_id = message.split("request_id=", 1)[1].split(" ", 1)[0]
     UUID(request_id)
