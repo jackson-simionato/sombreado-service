@@ -20,6 +20,8 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )
     log_level: str = "INFO"
+    access_log_fast_below_ms: float = 200
+    access_log_slow_at_or_above_ms: float = 1000
     nearby_radius_meters: float = 100
     nearby_limit: int = 10
     route_candidate_nearby_radius_meters: float = 1200

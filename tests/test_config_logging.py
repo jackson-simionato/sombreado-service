@@ -20,6 +20,8 @@ def test_settings_defaults_use_passenger_api_values(monkeypatch):
     assert settings.route_candidate_search_limit == 8
     assert settings.off_route_threshold_meters == 75
     assert settings.nominal_bus_speed_kmh == 18
+    assert settings.access_log_fast_below_ms == 200
+    assert settings.access_log_slow_at_or_above_ms == 1000
 
 
 def test_cors_origins_can_be_configured_from_environment(monkeypatch):
