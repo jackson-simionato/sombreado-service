@@ -57,8 +57,10 @@ def test_nearby_statement_joins_current_pointer_and_uses_geography():
             limit=5,
         )
     )
-    assert "ST_DWithin(route_segments.geom," in sql
-    assert "min(ST_Distance(route_segments.geom," in sql
+    assert "WITH nearby_segments AS MATERIALIZED" in sql
+    assert "FROM route_segments WHERE ST_DWithin(route_segments.geom," in sql
+    assert sql.index("FROM route_segments") < sql.index("FROM nearby_segments JOIN dataset_route_versions")
+    assert "min(ST_Distance(nearby_segments.geom," in sql
     assert "ST_MakePoint(-48.5, -27.6)" in sql
     assert "AS geography" in sql
     assert sql.endswith("LIMIT 5")
