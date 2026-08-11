@@ -106,7 +106,7 @@ From the Neon Console **Connect** dialog (or `neon env pull`):
 
 1. Paste the **pooled** connection string (hostname contains `-pooler`, e.g. `ep-example-pooler.region.aws.neon.tech`) into Render Runtime Secret `DATABASE_URL` and the Actions scrape secret `DATABASE_URL`.
 2. Paste the **direct** / unpooled connection string into `DATABASE_URL_UNPOOLED` on Render (and Actions if you migrate there). Alembic DDL prefers this direct DSN; app/scrape traffic stays on the pooled URL.
-3. SQLAlchemy uses `NullPool` + `pool_pre_ping` against the pooled DSN — do not point app engines at a large client-side pool.
+3. SQLAlchemy passenger engines use a tiny client pool (`pool_size=2`, `pool_pre_ping`) against the pooled DSN (ADR 0010). Alembic migrate stays on `NullPool` + prefers `DATABASE_URL_UNPOOLED`.
 
 After CI passes on `main`, `.github/workflows/ci.yml` calls the Render Deploy Hook (`RENDER_DEPLOY_HOOK_URL`, optionally skipped with `ALLOW_SKIP_DEPLOY=1`). Do not put the Deploy Hook URL on Render.
 

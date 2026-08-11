@@ -1,10 +1,14 @@
 """Neon Free connection / pooling helpers for app engines and migrations.
 
-Locked pattern (#83 / ADR 0006):
+Locked pattern (ADR 0006, amended by ADR 0010 / #93):
 - App + scrape traffic use the Neon **pooled** DSN (`DATABASE_URL`, hostname with
-  ``-pooler``) and SQLAlchemy ``NullPool`` so we do not double-pool against
-  PgBouncer transaction mode.
-- Alembic DDL prefers the Neon **direct** DSN (`DATABASE_URL_UNPOOLED`) when set.
+  ``-pooler``).
+- Long-lived Render passenger API SQLAlchemy engines use a **tiny client pool**
+  (``pool_size=2``, ``pool_pre_ping``) so warm requests reuse TCP/TLS instead of
+  paying ~2–3s connect per call. This is intentional limited double-pooling
+  against PgBouncer transaction mode for a single-instance Free web service.
+- Alembic DDL prefers the Neon **direct** DSN (`DATABASE_URL_UNPOOLED`) when set
+  and keeps ``NullPool`` in ``migrations/env.py``.
 """
 
 from __future__ import annotations
@@ -12,8 +16,6 @@ from __future__ import annotations
 import os
 from typing import Any
 from urllib.parse import urlparse, urlunparse
-
-from sqlalchemy.pool import NullPool
 
 __all__ = [
     "resolve_migration_database_url",
@@ -31,9 +33,10 @@ def sqlalchemy_database_url(database_url: str) -> str:
 
 
 def sqlalchemy_neon_engine_kwargs() -> dict[str, Any]:
-    """SQLAlchemy engine kwargs for Neon pooled application DSNs."""
+    """SQLAlchemy engine kwargs for Neon pooled application DSNs (ADR 0010)."""
     return {
-        "poolclass": NullPool,
+        "pool_size": 2,
+        "max_overflow": 0,
         "pool_pre_ping": True,
     }
 
