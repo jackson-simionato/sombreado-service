@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from typing import TypeVar
 from uuid import UUID
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from sombreado.domain.geometry import parse_linestring_wkt
 from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirectionKind, RouteSegment
+from sombreado.logging import get_logger
 from sombreado.store.discovery import (
     RouteCandidateRow,
     find_nearby_route_candidates,
@@ -24,6 +26,8 @@ from sombreado.store.generation import GenerationStore
 
 _T = TypeVar("_T")
 
+logger = get_logger(__name__)
+
 
 class CurrentRouteReadService:
     """Read passenger route data from Generation Store `current` only.
@@ -36,7 +40,10 @@ class CurrentRouteReadService:
         self._store = store
 
     async def search_route_candidates(self, *, query: str, limit: int) -> list[RouteCandidate]:
-        rows = await self._run_session(lambda session: search_route_candidates(session, query=query, limit=limit))
+        rows = await self._run_session(
+            "search_route_candidates",
+            lambda session: search_route_candidates(session, query=query, limit=limit),
+        )
         return [_to_route_candidate(row) for row in rows]
 
     async def find_nearby_route_candidates(
@@ -48,23 +55,28 @@ class CurrentRouteReadService:
         limit: int,
     ) -> list[RouteCandidate]:
         rows = await self._run_session(
+            "find_nearby_route_candidates",
             lambda session: find_nearby_route_candidates(
                 session,
                 lat=lat,
                 lng=lng,
                 radius_meters=radius_meters,
                 limit=limit,
-            )
+            ),
         )
         return [_to_route_candidate(row) for row in rows]
 
     async def load_current_route_version_id(self, route_id: UUID) -> UUID | None:
-        version_id = await self._run_session(lambda session: load_current_route_version_id(session, str(route_id)))
+        version_id = await self._run_session(
+            "load_current_route_version_id",
+            lambda session: load_current_route_version_id(session, str(route_id)),
+        )
         return None if version_id is None else UUID(version_id)
 
     async def load_direction_choices(self, *, route_version_id: UUID) -> list[DirectionChoice]:
         rows = await self._run_session(
-            lambda session: load_direction_choices(session, route_version_id=str(route_version_id))
+            "load_direction_choices",
+            lambda session: load_direction_choices(session, route_version_id=str(route_version_id)),
         )
         return [
             DirectionChoice(
@@ -84,11 +96,12 @@ class CurrentRouteReadService:
         route_direction_id: UUID,
     ) -> bool:
         return await self._run_session(
+            "route_direction_belongs_to_version",
             lambda session: route_direction_belongs_to_version(
                 session,
                 route_version_id=str(route_version_id),
                 route_direction_id=str(route_direction_id),
-            )
+            ),
         )
 
     async def load_current_route_segments(
@@ -98,11 +111,12 @@ class CurrentRouteReadService:
         route_direction_id: UUID,
     ) -> list[RouteSegment]:
         rows = await self._run_session(
+            "load_current_route_segments",
             lambda session: load_current_route_segments(
                 session,
                 route_version_id=str(route_version_id),
                 route_direction_id=str(route_direction_id),
-            )
+            ),
         )
         return [
             RouteSegment(
@@ -116,10 +130,23 @@ class CurrentRouteReadService:
             for row in rows
         ]
 
-    async def _run_session(self, operation: Callable[[Session], _T]) -> _T:
+    async def _run_session(self, operation_name: str, operation: Callable[[Session], _T]) -> _T:
         def run() -> _T:
             with self._store.session() as session:
-                return operation(session)
+                started = time.perf_counter()
+                # Force checkout so connect/TLS/pre-ping is not folded into query_ms.
+                session.connection()
+                connect_ms = round((time.perf_counter() - started) * 1000)
+                started = time.perf_counter()
+                result = operation(session)
+                query_ms = round((time.perf_counter() - started) * 1000)
+            logger.info(
+                "db_session operation=%s connect_ms=%s query_ms=%s",
+                operation_name,
+                connect_ms,
+                query_ms,
+            )
+            return result
 
         return await asyncio.to_thread(run)
 
