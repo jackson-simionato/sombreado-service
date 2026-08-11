@@ -124,6 +124,14 @@ _Avoid_: Raw solar elevation, azimuth debug value
 The passenger-facing seating area suggested by Advice to reduce direct sun exposure, such as left, right, front, back, or neutral.
 _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure inversion
 
+**Request Access Log**:
+One log record per completed inbound HTTP request to the passenger API, carrying method, path, status, duration, Response Duration Class, and request id. It is not a scrape job log and never includes passenger coordinates, query strings, or bodies.
+_Avoid_: APM trace, metrics dashboard, scrape run log, request body dump
+
+**Response Duration Class**:
+A coarse label of wall-clock passenger-API response time as fast, medium, or slow against configured thresholds.
+_Avoid_: Percentile SLO, apdex score, scrape job duration
+
 ## Relationships
 
 - The **Sombreado Service** exposes separate API and **Scrape CLI** processes that share package code, not process lifecycle.
@@ -167,6 +175,7 @@ _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure
 - A **Render Deployment** runs the passenger API; scrape publishes against Neon from GitHub Actions.
 - A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it (deploy hook / Neon writer credentials).
 - A **Runtime Secret** belongs on Render when the API process needs it (Neon pooled `DATABASE_URL`; optional direct `DATABASE_URL_UNPOOLED` for migrate).
+- Every completed inbound HTTP request to the passenger API produces one **Request Access Log** with a **Response Duration Class**.
 
 ## Example dialogue
 
