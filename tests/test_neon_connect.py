@@ -119,3 +119,7 @@ def test_readme_documents_pooled_runtime_and_unpooled_migrate():
     assert "pooled" in text.lower()
     assert "DATABASE_URL_UNPOOLED" in text
     assert "-pooler" in text or "pooler" in text.lower()
+    assert "ADR 0010" in text
+    assert "pool_size=2" in text
+    assert "max_overflow=0" in text
+    assert "pool_pre_ping" in text
