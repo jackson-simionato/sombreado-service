@@ -20,6 +20,8 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173"]
     )
     log_level: str = "INFO"
+    access_log_fast_below_ms: float = 200
+    access_log_slow_at_or_above_ms: float = 1000
     nearby_radius_meters: float = 100
     nearby_limit: int = 10
     route_candidate_nearby_radius_meters: float = 1200
@@ -51,6 +53,10 @@ class Settings(BaseSettings):
             raise ValueError("route candidate limits must be >= 1 for the API")
         if self.off_route_threshold_meters <= 0 or self.nominal_bus_speed_kmh <= 0:
             raise ValueError("advice thresholds must be positive for the API")
+        if self.access_log_fast_below_ms < 0 or self.access_log_slow_at_or_above_ms < 0:
+            raise ValueError("access log duration thresholds must be >= 0 for the API")
+        if self.access_log_fast_below_ms > self.access_log_slow_at_or_above_ms:
+            raise ValueError("access_log_fast_below_ms must be <= access_log_slow_at_or_above_ms for the API")
         return self
 
     def require_cli(self) -> "Settings":

@@ -20,6 +20,8 @@ def test_settings_defaults_use_passenger_api_values(monkeypatch):
     assert settings.route_candidate_search_limit == 8
     assert settings.off_route_threshold_meters == 75
     assert settings.nominal_bus_speed_kmh == 18
+    assert settings.access_log_fast_below_ms == 200
+    assert settings.access_log_slow_at_or_above_ms == 1000
 
 
 def test_cors_origins_can_be_configured_from_environment(monkeypatch):
@@ -62,6 +64,25 @@ def test_api_settings_reject_empty_cors_origins(database_url: str):
 
     with pytest.raises(ValueError, match="CORS_ORIGINS"):
         settings.require_api()
+
+
+def test_api_settings_reject_invalid_access_log_duration_thresholds():
+    base = {
+        "database_url": "postgresql://postgres:postgres@localhost:5432/sombreado_test",
+        "cors_origins": ["http://localhost:3000"],
+    }
+
+    with pytest.raises(ValueError, match="access log duration thresholds"):
+        Settings(_env_file=None, **base, access_log_fast_below_ms=-1).require_api()
+    with pytest.raises(ValueError, match="access log duration thresholds"):
+        Settings(_env_file=None, **base, access_log_slow_at_or_above_ms=-1).require_api()
+    with pytest.raises(ValueError, match="access_log_fast_below_ms must be <="):
+        Settings(
+            _env_file=None,
+            **base,
+            access_log_fast_below_ms=1000,
+            access_log_slow_at_or_above_ms=200,
+        ).require_api()
 
 
 def test_configure_logging_sets_level_and_shared_logger(caplog):

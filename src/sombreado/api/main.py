@@ -3,12 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import Receive, Scope, Send
 
 from sombreado.api.errors import (
     public_api_error_handler,
     unexpected_public_error_handler,
     validation_exception_handler,
 )
+from sombreado.api.request_access_log import RequestAccessLogMiddleware
 from sombreado.api.routes import advisory, health, nearby, route_candidates
 from sombreado.config import get_api_settings, get_settings
 from sombreado.domain.errors import ServiceError
@@ -29,13 +31,42 @@ async def lifespan(_app: FastAPI):
     yield
 
 
+class AccessLoggedAPI(FastAPI):
+    """FastAPI app with Request Access Log outside ServerErrorMiddleware."""
+
+    def __init__(
+        self,
+        *,
+        access_log_fast_below_ms: float,
+        access_log_slow_at_or_above_ms: float,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._request_access_log = RequestAccessLogMiddleware(
+            self._call_fastapi,
+            fast_below_ms=access_log_fast_below_ms,
+            slow_at_or_above_ms=access_log_slow_at_or_above_ms,
+        )
+
+    async def _call_fastapi(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await super().__call__(scope, receive, send)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._request_access_log(scope, receive, send)
+
+
 def create_app() -> FastAPI:
     # CORS/logging may load before DATABASE_URL is set (module import / test setup).
     # Lifespan and deps call get_api_settings() and require a non-empty DATABASE_URL.
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    app = FastAPI(title="sombreado-service", lifespan=lifespan)
+    app = AccessLoggedAPI(
+        title="sombreado-service",
+        lifespan=lifespan,
+        access_log_fast_below_ms=settings.access_log_fast_below_ms,
+        access_log_slow_at_or_above_ms=settings.access_log_slow_at_or_above_ms,
+    )
     app.add_exception_handler(ServiceError, public_api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(Exception, unexpected_public_error_handler)
