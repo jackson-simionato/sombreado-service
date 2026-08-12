@@ -25,17 +25,17 @@ from sombreado.domain.schemas import (
     RouteSegment,
     SegmentForAdvice,
 )
+from sombreado.route_reads.current import AdviceRouteContext
 
 
 class RouteSegmentSource(Protocol):
-    async def load_current_route_version_id(self, route_id: UUID) -> UUID | None: ...
-
-    async def route_direction_belongs_to_version(
+    async def load_advice_route_context(
         self,
         *,
+        route_id: UUID,
         route_version_id: UUID,
         route_direction_id: UUID,
-    ) -> bool: ...
+    ) -> AdviceRouteContext: ...
 
     async def load_current_route_segments(
         self,
@@ -57,27 +57,25 @@ class AdviceService:
                 message="Request validation failed.",
             )
 
-        current_route_version_id = await self._route_service.load_current_route_version_id(request.route_id)
-        if current_route_version_id is None:
+        context = await self._route_service.load_advice_route_context(
+            route_id=request.route_id,
+            route_version_id=request.route_version_id,
+            route_direction_id=request.route_direction_id,
+        )
+        if context.status == "route_not_found":
             raise ServiceError(code="routeNotFound", message="Current route was not found.")
-        if current_route_version_id != request.route_version_id:
+        if context.status == "route_version_stale":
             raise ServiceError(
                 code="routeVersionStale",
                 message="Selected route version is no longer current.",
             )
-        if not await self._route_service.route_direction_belongs_to_version(
-            route_version_id=request.route_version_id,
-            route_direction_id=request.route_direction_id,
-        ):
+        if context.status == "route_direction_not_found":
             raise ServiceError(
                 code="routeDirectionNotFound",
                 message="Current route direction was not found.",
             )
 
-        segments = await self._route_service.load_current_route_segments(
-            route_version_id=request.route_version_id,
-            route_direction_id=request.route_direction_id,
-        )
+        segments = context.segments
         if not segments:
             return AdviceWithheld(
                 mode=request.mode,
