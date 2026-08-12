@@ -50,9 +50,12 @@ jobs:
             exit 0
           fi
 
-          if ! git merge-base --is-ancestor origin/main origin/develop; then
-            echo "main is not an ancestor of develop; refuse to promote until histories are reconciled."
-            exit 1
+          # Merge commits on main (from prior promotes) mean tips differ even when
+          # develop is fully contained. Only promote when develop has unique commits.
+          ahead_count="$(git rev-list --count origin/main..origin/develop)"
+          if [ "${ahead_count}" -eq 0 ]; then
+            echo "develop (${develop_sha}) is already contained in main (${main_sha}); nothing to promote."
+            exit 0
           fi
 
           pr_number="$(

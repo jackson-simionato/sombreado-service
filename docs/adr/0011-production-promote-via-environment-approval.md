@@ -29,4 +29,5 @@ Dedicated hotfix-to-`main` policy; implement only if production emergencies need
 - Pipeline Secret `PROMOTE_GITHUB_TOKEN` (PAT/fine-grained: Contents + Pull requests) is required so the promote PR and merge trigger CI. `GITHUB_TOKEN` alone does not start new workflow runs, so it cannot satisfy “CI on the PR, then CI+Deploy Hook on `main`”.
 - `main` is branch-protected: no direct pushes, PR required, CI status required, no required human review (so the agent can merge after checks).
 - Repo auto-merge may be enabled as convenience; the workflow waits for checks and merges explicitly.
+- Promote is a no-op when `develop` has no commits ahead of `main` (tips may still differ because prior promotes add merge commits on `main`). Do not require `main` to be a strict ancestor of `develop`.
 - Workflow: `.github/workflows/promote.yml`. Glossary term: **Production Promote** in `CONTEXT.md`.
