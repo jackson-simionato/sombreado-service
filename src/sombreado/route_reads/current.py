@@ -6,7 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TypeVar
+from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from sombreado.domain.geometry import parse_linestring_wkt
 from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirectionKind, RouteSegment
 from sombreado.logging import get_logger
 from sombreado.store.discovery import (
+    AdviceRouteContextStatus,
     RouteCandidateRow,
     RouteSegmentRow,
     find_nearby_route_candidates,
@@ -30,8 +31,6 @@ from sombreado.store.generation import GenerationStore
 _T = TypeVar("_T")
 
 logger = get_logger(__name__)
-
-AdviceRouteContextStatus = Literal["route_not_found", "route_version_stale", "route_direction_not_found", "ok"]
 
 
 @dataclass(frozen=True)

@@ -41,11 +41,15 @@ Retired production hosting seam. Historically one Oracle Always Free VM with sys
 _Avoid_: Current production deploy target
 
 **Render Deployment**:
-The production runtime for the passenger API on one Render Free web service. GitHub Actions triggers deploy via Render Deploy Hook after CI passes on `main`; scrape runs as an Actions job against Neon, not on the Render instance.
+The production runtime for the passenger API on one Render Free web service. GitHub Actions triggers deploy via Render Deploy Hook after CI passes on `main`; scrape runs as an Actions job against Neon, not on the Render instance. Intentional advances of `main` happen through **Production Promote**.
 _Avoid_: Oracle VM as production API host, co-located scrape on the web service, registry-based deploy for v1
 
+**Production Promote**:
+The human-approved release ritual that advances production by moving validated `develop` onto `main` (audit PR, no human PR review). The human gate is environment approval that production may advance; merge is a consequence, not the decision. After `main` moves, **Render Deployment** follows existing CI on `main`.
+_Avoid_: Manual `develop`→`main` review PR as the release gate, approving a “pipeline” as if this were Azure DevOps, deploying straight from `develop`, fast-forward push to `main` without an audit PR
+
 **Pipeline Secret**:
-A secret used by GitHub Actions for deploy-hook or scrape/Neon authentication.
+A secret used by GitHub Actions for deploy-hook, scrape/Neon authentication, or **Production Promote**.
 _Avoid_: Runtime secret, application setting, R2 backup credentials as a v1 requirement
 
 **Runtime Secret**:
@@ -214,7 +218,7 @@ _Avoid_: Percentile SLO, apdex score, scrape job duration
 - The **Generation Store** is the passenger read path for discovery, directions, geometry, and advice.
 - **Scraper Database** / **Reader Database Role** are retired API seams; do not reintroduce them for passenger reads.
 - Cutover is overwrite-in-place on Render Free (ADR 0009): frontend `NEXT_PUBLIC_API_URL` unchanged; scraper PostGIS is idle-hold then destroy, not a warm dual-Render rollback host.
-- "deploy" means CI on `main` then Render Deploy Hook for the API; scrape is Actions-only against Neon — not Oracle VM rsync or co-located scrape on the web service.
+- "deploy" means CI on `main` then Render Deploy Hook for the API; scrape is Actions-only against Neon — not Oracle VM rsync or co-located scrape on the web service. Advancing `main` on purpose is **Production Promote**, not a human-reviewed `develop`→`main` release PR.
 - `DATABASE_URL` is the passenger API and scrape CLI Generation Store setting (Neon pooled host in production); optional `DATABASE_URL_UNPOOLED` is the Neon direct DSN for Alembic; `SQLITE_DATABASE_PATH` is not the production store path.
 - "route listing" means listing **Current Route Data**, not exposing historical or archived route versions.
 - "filtering" means **Route Search** and optional **Nearby Route Filter**, not scraper administration queries.

@@ -1,0 +1,101 @@
+name: Production Promote
+
+# Human gate is Environment `production` approval (ADR 0011).
+# The develop→main PR is an audit receipt; it is not a review surface.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote develop to main
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      # Pipeline Secret: PAT/fine-grained token so the promote PR and merge
+      # trigger CI (GITHUB_TOKEN events do not start new workflow runs).
+      PROMOTE_GITHUB_TOKEN: ${{ secrets.PROMOTE_GITHUB_TOKEN }}
+
+    steps:
+      - name: Require Production Promote Pipeline Secret
+        run: |
+          if [ -z "${PROMOTE_GITHUB_TOKEN}" ]; then
+            echo "PROMOTE_GITHUB_TOKEN repository secret is required for Production Promote."
+            echo "Use a classic PAT or fine-grained token with Contents read/write and Pull requests read/write."
+            echo "See docs/adr/0011-production-promote-via-environment-approval.md."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PROMOTE_GITHUB_TOKEN }}
+
+      - name: Create or reuse promote PR and merge
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTE_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin develop main
+
+          develop_sha="$(git rev-parse origin/develop)"
+          main_sha="$(git rev-parse origin/main)"
+
+          if [ "${develop_sha}" = "${main_sha}" ]; then
+            echo "develop and main already at ${develop_sha}; nothing to promote."
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor origin/main origin/develop; then
+            echo "main is not an ancestor of develop; refuse to promote until histories are reconciled."
+            exit 1
+          fi
+
+          pr_number="$(
+            gh pr list --base main --head develop --state open \
+              --json number --jq '.[0].number // empty'
+          )"
+
+          if [ -z "${pr_number}" ]; then
+            pr_body="$(printf '%s\n' \
+              '## Summary' \
+              '' \
+              'Automated **Production Promote** (ADR 0011).' \
+              '' \
+              'The human gate was Environment `production` approval on the workflow run that opened or merged this PR — not PR review.' \
+              '' \
+              "- \`develop\`: \`${develop_sha}\`" \
+              "- \`main\` (before): \`${main_sha}\`" \
+              '' \
+              '## Notes' \
+              '' \
+              'Do not treat this PR as a release review surface.')"
+            gh pr create --base main --head develop \
+              --title "Production Promote: develop → main" \
+              --body "${pr_body}"
+            pr_number="$(
+              gh pr list --base main --head develop --state open \
+                --json number --jq '.[0].number'
+            )"
+          else
+            echo "Reusing open promote PR #${pr_number}"
+          fi
+
+          echo "Waiting for required checks on PR #${pr_number}..."
+          # Checks can take a few seconds to appear after PR creation.
+          for _ in $(seq 1 30); do
+            if gh pr checks "${pr_number}" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+
+          gh pr checks "${pr_number}" --watch --fail-fast
+          gh pr merge "${pr_number}" --merge --delete-branch=false
+
+          git fetch origin main
+          echo "Promoted. main is now at $(git rev-parse origin/main)."
