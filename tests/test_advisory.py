@@ -15,6 +15,7 @@ from sombreado.domain.schemas import (
     OnboardAdviceRequest,
     RouteSegment,
 )
+from sombreado.route_reads.current import AdviceRouteContext
 
 ROUTE_ID = UUID("00000000-0000-0000-0000-000000000001")
 ROUTE_VERSION_ID = UUID("00000000-0000-0000-0000-000000000002")
@@ -64,17 +65,22 @@ class PreviewRouteService:
                 )
             ]
         )
+        self.advice_context_calls = 0
 
-    async def load_current_route_version_id(self, route_id):
-        self.last_route_id = route_id
-        return self.route_version_id
-
-    async def route_direction_belongs_to_version(self, *, route_version_id, route_direction_id):
-        self.last_membership_request = {
+    async def load_advice_route_context(self, *, route_id, route_version_id, route_direction_id):
+        self.advice_context_calls += 1
+        self.last_advice_context_request = {
+            "route_id": route_id,
             "route_version_id": route_version_id,
             "route_direction_id": route_direction_id,
         }
-        return self.direction_belongs
+        if self.route_version_id is None:
+            return AdviceRouteContext(status="route_not_found", segments=[])
+        if self.route_version_id != route_version_id:
+            return AdviceRouteContext(status="route_version_stale", segments=[])
+        if not self.direction_belongs:
+            return AdviceRouteContext(status="route_direction_not_found", segments=[])
+        return AdviceRouteContext(status="ok", segments=list(self.segments))
 
     async def load_current_route_segments(self, *, route_version_id, route_direction_id):
         self.last_segments_request = {
@@ -164,7 +170,8 @@ async def test_advisory_returns_upcoming_and_remaining_exposure_when_on_route():
 
 
 async def test_preview_advice_anchors_at_direction_start_and_returns_remaining_route(monkeypatch):
-    service = AdviceService(route_service=PreviewRouteService(), settings=Settings())
+    route_service = PreviewRouteService()
+    service = AdviceService(route_service=route_service, settings=Settings())
 
     monkeypatch.setattr(
         "sombreado.advice.service.sun_position",
@@ -173,6 +180,7 @@ async def test_preview_advice_anchors_at_direction_start_and_returns_remaining_r
 
     response = await service.build_advice(_advice_request())
 
+    assert route_service.advice_context_calls == 1
     assert response.status == "advice"
     assert response.mode is AdviceMode.preview
     assert response.horizon is AdviceHorizon.remaining_route

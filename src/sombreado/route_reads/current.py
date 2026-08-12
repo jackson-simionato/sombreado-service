@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from typing import TypeVar
+from dataclasses import dataclass
+from typing import Literal, TypeVar
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -15,7 +16,9 @@ from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirec
 from sombreado.logging import get_logger
 from sombreado.store.discovery import (
     RouteCandidateRow,
+    RouteSegmentRow,
     find_nearby_route_candidates,
+    load_advice_route_context,
     load_current_route_segments,
     load_current_route_version_id,
     load_direction_choices,
@@ -27,6 +30,14 @@ from sombreado.store.generation import GenerationStore
 _T = TypeVar("_T")
 
 logger = get_logger(__name__)
+
+AdviceRouteContextStatus = Literal["route_not_found", "route_version_stale", "route_direction_not_found", "ok"]
+
+
+@dataclass(frozen=True)
+class AdviceRouteContext:
+    status: AdviceRouteContextStatus
+    segments: list[RouteSegment]
 
 
 class CurrentRouteReadService:
@@ -118,17 +129,29 @@ class CurrentRouteReadService:
                 route_direction_id=str(route_direction_id),
             ),
         )
-        return [
-            RouteSegment(
-                id=UUID(row.public_id),
-                sequence=row.sequence,
-                coordinates=parse_linestring_wkt(row.geometry),
-                bearing_degrees=row.bearing_degrees,
-                distance_meters=row.distance_meters,
-                cumulative_distance_meters=row.cumulative_distance_meters,
-            )
-            for row in rows
-        ]
+        return [_to_route_segment(row) for row in rows]
+
+    async def load_advice_route_context(
+        self,
+        *,
+        route_id: UUID,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> AdviceRouteContext:
+        """Validate current version + direction and load segments in one DB session (#99)."""
+        row = await self._run_session(
+            "load_advice_route_context",
+            lambda session: load_advice_route_context(
+                session,
+                route_id=str(route_id),
+                route_version_id=str(route_version_id),
+                route_direction_id=str(route_direction_id),
+            ),
+        )
+        return AdviceRouteContext(
+            status=row.status,
+            segments=[_to_route_segment(segment) for segment in row.segments],
+        )
 
     async def _run_session(self, operation_name: str, operation: Callable[[Session], _T]) -> _T:
         def run() -> _T:
@@ -159,6 +182,17 @@ def _to_route_candidate(row: RouteCandidateRow) -> RouteCandidate:
         route_name=row.route_name,
         direction_hints=list(row.direction_hints),
         distance_meters=row.distance_meters,
+    )
+
+
+def _to_route_segment(row: RouteSegmentRow) -> RouteSegment:
+    return RouteSegment(
+        id=UUID(row.public_id),
+        sequence=row.sequence,
+        coordinates=parse_linestring_wkt(row.geometry),
+        bearing_degrees=row.bearing_degrees,
+        distance_meters=row.distance_meters,
+        cumulative_distance_meters=row.cumulative_distance_meters,
     )
 
 

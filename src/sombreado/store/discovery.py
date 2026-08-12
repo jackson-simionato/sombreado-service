@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from geoalchemy2 import Geography
 from sqlalchemy import ColumnElement, and_, cast, func, or_, select
@@ -48,6 +49,14 @@ class RouteSegmentRow:
     bearing_degrees: float
     distance_meters: float
     cumulative_distance_meters: float
+
+
+@dataclass(frozen=True)
+class AdviceRouteContextRow:
+    """Single-session result for advice route/version/direction + segments (#99)."""
+
+    status: Literal["route_not_found", "route_version_stale", "route_direction_not_found", "ok"]
+    segments: tuple[RouteSegmentRow, ...] = ()
 
 
 def _current_pointer_join() -> ColumnElement[bool]:
@@ -376,6 +385,35 @@ def load_current_route_segments(
             cumulative_distance_meters=float(row.cumulative_distance_meters),
         )
         for row in rows
+    )
+
+
+def load_advice_route_context(
+    session: Session,
+    *,
+    route_id: str,
+    route_version_id: str,
+    route_direction_id: str,
+) -> AdviceRouteContextRow:
+    """Load advice prerequisites in one session: current version, membership, segments."""
+    current_route_version_id = load_current_route_version_id(session, route_id)
+    if current_route_version_id is None:
+        return AdviceRouteContextRow(status="route_not_found")
+    if current_route_version_id != route_version_id:
+        return AdviceRouteContextRow(status="route_version_stale")
+    if not route_direction_belongs_to_version(
+        session,
+        route_version_id=route_version_id,
+        route_direction_id=route_direction_id,
+    ):
+        return AdviceRouteContextRow(status="route_direction_not_found")
+    return AdviceRouteContextRow(
+        status="ok",
+        segments=load_current_route_segments(
+            session,
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        ),
     )
 
 
