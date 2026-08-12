@@ -27,6 +27,12 @@ from sombreado.domain.schemas import (
 )
 from sombreado.route_reads.current import AdviceRouteContext
 
+_ADVICE_CONTEXT_ERRORS: dict[str, tuple[str, str]] = {
+    "route_not_found": ("routeNotFound", "Current route was not found."),
+    "route_version_stale": ("routeVersionStale", "Selected route version is no longer current."),
+    "route_direction_not_found": ("routeDirectionNotFound", "Current route direction was not found."),
+}
+
 
 class RouteSegmentSource(Protocol):
     async def load_advice_route_context(
@@ -62,18 +68,9 @@ class AdviceService:
             route_version_id=request.route_version_id,
             route_direction_id=request.route_direction_id,
         )
-        if context.status == "route_not_found":
-            raise ServiceError(code="routeNotFound", message="Current route was not found.")
-        if context.status == "route_version_stale":
-            raise ServiceError(
-                code="routeVersionStale",
-                message="Selected route version is no longer current.",
-            )
-        if context.status == "route_direction_not_found":
-            raise ServiceError(
-                code="routeDirectionNotFound",
-                message="Current route direction was not found.",
-            )
+        if context.status in _ADVICE_CONTEXT_ERRORS:
+            code, message = _ADVICE_CONTEXT_ERRORS[context.status]
+            raise ServiceError(code=code, message=message)
 
         segments = context.segments
         if not segments:

@@ -98,7 +98,7 @@ Production target is **Render Free** for the passenger API and **Neon Free Postg
 | Kind | Where | Secrets |
 | --- | --- | --- |
 | **Runtime Secret** | Render web service env | `DATABASE_URL` (Neon **pooled**); optional `DATABASE_URL_UNPOOLED` (Neon **direct**, for container migrate) |
-| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL` (CI deploy); `DATABASE_URL` (Neon **pooled** writer for scrape); optional `DATABASE_URL_UNPOOLED` if Actions runs migrate |
+| **Pipeline Secret** | GitHub Actions repository secrets | `RENDER_DEPLOY_HOOK_URL` (CI deploy); `DATABASE_URL` (Neon **pooled** writer for scrape); optional `DATABASE_URL_UNPOOLED` if Actions runs migrate; `PROMOTE_GITHUB_TOKEN` (**Production Promote** PAT) |
 
 #### Neon `DATABASE_URL` shape (ADR 0006)
 
@@ -109,6 +109,8 @@ From the Neon Console **Connect** dialog (or `neon env pull`):
 3. SQLAlchemy passenger engines use a tiny client pool (`pool_size=2`, `max_overflow=0`, `pool_pre_ping`) against the pooled DSN (ADR 0010). Alembic migrate stays on `NullPool` + prefers `DATABASE_URL_UNPOOLED`.
 
 After CI passes on `main`, `.github/workflows/ci.yml` calls the Render Deploy Hook (`RENDER_DEPLOY_HOOK_URL`, optionally skipped with `ALLOW_SKIP_DEPLOY=1`). Do not put the Deploy Hook URL on Render.
+
+**Production Promote** (ADR 0011): when `develop` should become production, run Actions workflow `Production Promote`, approve the `production` Environment, and let the agent create/merge the audit PR onto `main` (that push re-runs CI and the Deploy Hook). Requires Pipeline Secret `PROMOTE_GITHUB_TOKEN` (classic PAT or fine-grained token with Contents read/write and Pull requests read/write). Do not use a human-reviewed `develop`→`main` PR as the release gate.
 
 Scheduled scrape is `.github/workflows/scrape.yml`: daily `schedule` (off-peak `America/Sao_Paulo`) plus `workflow_dispatch`. Set the Neon **pooled** writer URL as the Actions repository secret `DATABASE_URL` (Pipeline Secret). The Render web service does not need scrape writer credentials for this job, and scrape is not a Render cron/worker/one-off. A failed scrape after the CLI’s one automatic retry fails the Actions job so repo watchers get the default failure notification. Use `workflow_dispatch` with `force=true` only for lease/staging recovery.
 
