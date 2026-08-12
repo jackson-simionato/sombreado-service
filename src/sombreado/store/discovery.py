@@ -21,6 +21,8 @@ from sombreado.store.models import (
 
 PUBLIC_DIRECTION_LABEL_CONFIDENCES = ("high", "medium")
 
+AdviceRouteContextStatus = Literal["route_not_found", "route_version_stale", "route_direction_not_found", "ok"]
+
 
 @dataclass(frozen=True)
 class RouteCandidateRow:
@@ -55,8 +57,24 @@ class RouteSegmentRow:
 class AdviceRouteContextRow:
     """Single-session result for advice route/version/direction + segments (#99)."""
 
-    status: Literal["route_not_found", "route_version_stale", "route_direction_not_found", "ok"]
+    status: AdviceRouteContextStatus
     segments: tuple[RouteSegmentRow, ...] = ()
+
+
+def resolve_advice_route_context_status(
+    *,
+    current_route_version_id: str | None,
+    requested_route_version_id: str,
+    direction_belongs: bool,
+) -> AdviceRouteContextStatus:
+    """Map version/membership checks to a single advice-context status."""
+    if current_route_version_id is None:
+        return "route_not_found"
+    if current_route_version_id != requested_route_version_id:
+        return "route_version_stale"
+    if not direction_belongs:
+        return "route_direction_not_found"
+    return "ok"
 
 
 def _current_pointer_join() -> ColumnElement[bool]:
@@ -397,16 +415,20 @@ def load_advice_route_context(
 ) -> AdviceRouteContextRow:
     """Load advice prerequisites in one session: current version, membership, segments."""
     current_route_version_id = load_current_route_version_id(session, route_id)
-    if current_route_version_id is None:
-        return AdviceRouteContextRow(status="route_not_found")
-    if current_route_version_id != route_version_id:
-        return AdviceRouteContextRow(status="route_version_stale")
-    if not route_direction_belongs_to_version(
-        session,
-        route_version_id=route_version_id,
-        route_direction_id=route_direction_id,
-    ):
-        return AdviceRouteContextRow(status="route_direction_not_found")
+    direction_belongs = False
+    if current_route_version_id == route_version_id:
+        direction_belongs = route_direction_belongs_to_version(
+            session,
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        )
+    status = resolve_advice_route_context_status(
+        current_route_version_id=current_route_version_id,
+        requested_route_version_id=route_version_id,
+        direction_belongs=direction_belongs,
+    )
+    if status != "ok":
+        return AdviceRouteContextRow(status=status)
     return AdviceRouteContextRow(
         status="ok",
         segments=load_current_route_segments(

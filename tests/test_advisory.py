@@ -16,6 +16,7 @@ from sombreado.domain.schemas import (
     RouteSegment,
 )
 from sombreado.route_reads.current import AdviceRouteContext
+from sombreado.store.discovery import resolve_advice_route_context_status
 
 ROUTE_ID = UUID("00000000-0000-0000-0000-000000000001")
 ROUTE_VERSION_ID = UUID("00000000-0000-0000-0000-000000000002")
@@ -74,12 +75,13 @@ class PreviewRouteService:
             "route_version_id": route_version_id,
             "route_direction_id": route_direction_id,
         }
-        if self.route_version_id is None:
-            return AdviceRouteContext(status="route_not_found", segments=[])
-        if self.route_version_id != route_version_id:
-            return AdviceRouteContext(status="route_version_stale", segments=[])
-        if not self.direction_belongs:
-            return AdviceRouteContext(status="route_direction_not_found", segments=[])
+        status = resolve_advice_route_context_status(
+            current_route_version_id=None if self.route_version_id is None else str(self.route_version_id),
+            requested_route_version_id=str(route_version_id),
+            direction_belongs=self.direction_belongs,
+        )
+        if status != "ok":
+            return AdviceRouteContext(status=status, segments=[])
         return AdviceRouteContext(status="ok", segments=list(self.segments))
 
     async def load_current_route_segments(self, *, route_version_id, route_direction_id):
