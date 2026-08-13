@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeVar
 from uuid import UUID
 
@@ -16,6 +16,8 @@ from sombreado.domain.schemas import DirectionChoice, RouteCandidate, RouteDirec
 from sombreado.logging import get_logger
 from sombreado.store.discovery import (
     AdviceRouteContextStatus,
+    DirectionChoiceRow,
+    DirectionChoicesContextStatus,
     RouteCandidateRow,
     RouteSegmentRow,
     find_nearby_route_candidates,
@@ -23,6 +25,7 @@ from sombreado.store.discovery import (
     load_current_route_segments,
     load_current_route_version_id,
     load_direction_choices,
+    load_direction_choices_for_route,
     route_direction_belongs_to_version,
     search_route_candidates,
 )
@@ -37,6 +40,13 @@ logger = get_logger(__name__)
 class AdviceRouteContext:
     status: AdviceRouteContextStatus
     segments: list[RouteSegment]
+
+
+@dataclass(frozen=True)
+class DirectionChoicesContext:
+    status: DirectionChoicesContextStatus
+    route_version_id: UUID | None = None
+    directions: list[DirectionChoice] = field(default_factory=list)
 
 
 class CurrentRouteReadService:
@@ -95,16 +105,32 @@ class CurrentRouteReadService:
             "load_direction_choices",
             lambda session: load_direction_choices(session, route_version_id=str(route_version_id)),
         )
-        return [
-            DirectionChoice(
-                route_direction_id=UUID(row.route_direction_id),
-                sequence=row.sequence,
-                name=row.name,
-                direction_kind=_to_direction_kind(row.direction_kind),
-                departure_labels=list(row.departure_labels),
-            )
-            for row in rows
-        ]
+        return [_to_direction_choice(row) for row in rows]
+
+    async def load_direction_choices_for_route(
+        self,
+        *,
+        route_id: UUID,
+        requested_route_version_id: UUID | None = None,
+    ) -> DirectionChoicesContext:
+        """Resolve current version and load Direction Choices in one DB session (#114)."""
+        row = await self._run_session(
+            "load_direction_choices_for_route",
+            lambda session: load_direction_choices_for_route(
+                session,
+                route_id=str(route_id),
+                requested_route_version_id=(
+                    None if requested_route_version_id is None else str(requested_route_version_id)
+                ),
+            ),
+        )
+        if row.status != "ok" or row.route_version_id is None:
+            return DirectionChoicesContext(status=row.status)
+        return DirectionChoicesContext(
+            status="ok",
+            route_version_id=UUID(row.route_version_id),
+            directions=[_to_direction_choice(direction) for direction in row.directions],
+        )
 
     async def route_direction_belongs_to_version(
         self,
@@ -208,6 +234,16 @@ def _to_route_segment(row: RouteSegmentRow) -> RouteSegment:
         bearing_degrees=row.bearing_degrees,
         distance_meters=row.distance_meters,
         cumulative_distance_meters=row.cumulative_distance_meters,
+    )
+
+
+def _to_direction_choice(row: DirectionChoiceRow) -> DirectionChoice:
+    return DirectionChoice(
+        route_direction_id=UUID(row.route_direction_id),
+        sequence=row.sequence,
+        name=row.name,
+        direction_kind=_to_direction_kind(row.direction_kind),
+        departure_labels=list(row.departure_labels),
     )
 
 
