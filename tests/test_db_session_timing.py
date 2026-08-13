@@ -7,6 +7,20 @@ import pytest
 from sombreado.route_reads.current import CurrentRouteReadService
 
 
+class _FakeResult:
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+    def __iter__(self):
+        return iter(())
+
+
 class _FakeSession:
     def __init__(self) -> None:
         self.connection_calls = 0
@@ -14,6 +28,9 @@ class _FakeSession:
     def connection(self):
         self.connection_calls += 1
         return object()
+
+    def execute(self, *_args, **_kwargs):
+        return _FakeResult()
 
 
 class _FakeStore:
@@ -41,6 +58,26 @@ async def test_run_session_logs_connect_and_query_ms(caplog):
     assert "operation=search_route_candidates" in message
     assert "connect_ms=" in message
     assert "query_ms=" in message
+
+
+@pytest.mark.asyncio
+async def test_search_route_candidates_logs_query_ms_split(caplog):
+    store = _FakeStore()
+    service = CurrentRouteReadService(store)
+
+    with caplog.at_level(logging.INFO):
+        result = await service.search_route_candidates(query="330", limit=8)
+
+    assert result == []
+    assert store.session_obj.connection_calls == 1
+    records = [record for record in caplog.records if "db_session operation=" in record.getMessage()]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "operation=search_route_candidates" in message
+    assert "connect_ms=" in message
+    assert "query_ms=" in message
+    assert "candidates_ms=" in message
+    assert "direction_hints_ms=" in message
 
 
 @pytest.mark.asyncio
