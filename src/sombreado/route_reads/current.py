@@ -163,6 +163,21 @@ class CurrentRouteReadService:
         )
         return [_to_route_segment(row) for row in rows]
 
+    async def load_route_geometry_context(
+        self,
+        *,
+        route_id: UUID,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> AdviceRouteContext:
+        """Validate current version + direction and load segments in one DB session (#115)."""
+        return await self._load_version_direction_segments_context(
+            "load_route_geometry_context",
+            route_id=route_id,
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        )
+
     async def load_advice_route_context(
         self,
         *,
@@ -171,8 +186,23 @@ class CurrentRouteReadService:
         route_direction_id: UUID,
     ) -> AdviceRouteContext:
         """Validate current version + direction and load segments in one DB session (#99)."""
-        row = await self._run_session(
+        return await self._load_version_direction_segments_context(
             "load_advice_route_context",
+            route_id=route_id,
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        )
+
+    async def _load_version_direction_segments_context(
+        self,
+        operation_name: str,
+        *,
+        route_id: UUID,
+        route_version_id: UUID,
+        route_direction_id: UUID,
+    ) -> AdviceRouteContext:
+        row = await self._run_session(
+            operation_name,
             lambda session: load_advice_route_context(
                 session,
                 route_id=str(route_id),
