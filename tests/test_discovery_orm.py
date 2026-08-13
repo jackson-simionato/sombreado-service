@@ -16,6 +16,7 @@ from sombreado.store.discovery import (
     nearby_route_candidates_statement,
     route_direction_membership_statement,
     search_route_candidates_statement,
+    search_route_candidates_with_hints_statement,
 )
 
 _CURRENT_POINTER_JOIN = (
@@ -46,6 +47,15 @@ def test_search_statement_joins_current_pointer_and_filters_query():
     assert "FROM routes JOIN dataset_route_versions ON dataset_route_versions.route_id = routes.id" in sql
     assert "WHERE routes.code ILIKE '%%3A%%' OR routes.name ILIKE '%%3A%%'" in sql
     assert sql.endswith("LIMIT 8")
+
+
+def test_search_with_hints_statement_joins_current_pointer_and_left_joins_labels():
+    sql = _assert_orm_current_pointer(search_route_candidates_with_hints_statement(query="3A", limit=8))
+    assert "WHERE routes.code ILIKE '%%3A%%' OR routes.name ILIKE '%%3A%%'" in sql
+    assert "LIMIT 8" in sql
+    assert "LEFT OUTER JOIN route_directions" in sql
+    assert "LEFT OUTER JOIN service_directions" in sql
+    assert "service_directions.confidence IN ('high', 'medium')" in sql
 
 
 def test_nearby_statement_joins_current_pointer_and_uses_geography():

@@ -105,6 +105,39 @@ def search_route_candidates_statement(*, query: str, limit: int) -> Select:
     )
 
 
+def search_route_candidates_with_hints_statement(*, query: str, limit: int) -> Select:
+    """Build one-round-trip ORM select: current Route Candidates left-joined to Direction Hints."""
+    candidates = search_route_candidates_statement(query=query, limit=limit).subquery("search_candidates")
+    return (
+        select(
+            candidates.c.route_id,
+            candidates.c.route_version_id,
+            candidates.c.route_code,
+            candidates.c.route_name,
+            ServiceDirectionRecord.departure_label,
+        )
+        .select_from(candidates)
+        .outerjoin(
+            RouteDirectionRecord,
+            RouteDirectionRecord.route_version_id == candidates.c.route_version_id,
+        )
+        .outerjoin(
+            ServiceDirectionRecord,
+            and_(
+                ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id,
+                ServiceDirectionRecord.route_direction_id.is_not(None),
+                ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
+            ),
+        )
+        .order_by(
+            candidates.c.route_code.asc(),
+            candidates.c.route_name.asc(),
+            RouteDirectionRecord.sequence.asc().nulls_last(),
+            ServiceDirectionRecord.sequence.asc().nulls_last(),
+        )
+    )
+
+
 def nearby_route_candidates_statement(*, lat: float, lng: float, radius_meters: float, limit: int) -> Select:
     """Build the ORM select for current-generation nearby Route Candidates.
 
@@ -279,27 +312,50 @@ def search_route_candidates(
     limit: int,
     timings: dict[str, int] | None = None,
 ) -> tuple[RouteCandidateRow, ...]:
-    """Return current-generation Route Candidates matching code or name."""
-    started = time.perf_counter()
-    rows = session.execute(search_route_candidates_statement(query=query, limit=limit)).mappings().all()
-    if timings is not None:
-        timings["candidates_ms"] = round((time.perf_counter() - started) * 1000)
+    """Return current-generation Route Candidates matching code or name.
 
-    version_ids = [str(row["route_version_id"]) for row in rows]
+    Uses one Generation Store round-trip: candidates left-joined to Direction Hints.
+    """
     started = time.perf_counter()
-    hints_by_version = _direction_hints_by_version(session, version_ids)
+    rows = session.execute(search_route_candidates_with_hints_statement(query=query, limit=limit)).mappings().all()
     if timings is not None:
-        timings["direction_hints_ms"] = round((time.perf_counter() - started) * 1000)
+        # Single statement folds hints into the candidates round-trip (#109).
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        timings["candidates_ms"] = elapsed_ms
+        timings["direction_hints_ms"] = 0
+
+    assembled: dict[str, RouteCandidateRow] = {}
+    order: list[str] = []
+    hints: dict[str, list[str]] = {}
+    for row in rows:
+        version_id = str(row["route_version_id"])
+        if version_id not in assembled:
+            assembled[version_id] = RouteCandidateRow(
+                route_id=str(row["route_id"]),
+                route_version_id=version_id,
+                route_code=str(row["route_code"]),
+                route_name=str(row["route_name"]),
+                direction_hints=(),
+            )
+            order.append(version_id)
+            hints[version_id] = []
+        label = row["departure_label"]
+        if label is None:
+            continue
+        text_label = str(label)
+        bucket = hints[version_id]
+        if text_label not in bucket:
+            bucket.append(text_label)
 
     return tuple(
         RouteCandidateRow(
-            route_id=str(row["route_id"]),
-            route_version_id=str(row["route_version_id"]),
-            route_code=str(row["route_code"]),
-            route_name=str(row["route_name"]),
-            direction_hints=hints_by_version.get(str(row["route_version_id"]), ()),
+            route_id=assembled[version_id].route_id,
+            route_version_id=assembled[version_id].route_version_id,
+            route_code=assembled[version_id].route_code,
+            route_name=assembled[version_id].route_name,
+            direction_hints=tuple(hints[version_id]),
         )
-        for row in rows
+        for version_id in order
     )
 
 
