@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -276,11 +277,20 @@ def search_route_candidates(
     *,
     query: str,
     limit: int,
+    timings: dict[str, int] | None = None,
 ) -> tuple[RouteCandidateRow, ...]:
     """Return current-generation Route Candidates matching code or name."""
+    started = time.perf_counter()
     rows = session.execute(search_route_candidates_statement(query=query, limit=limit)).mappings().all()
+    if timings is not None:
+        timings["candidates_ms"] = round((time.perf_counter() - started) * 1000)
+
     version_ids = [str(row["route_version_id"]) for row in rows]
+    started = time.perf_counter()
     hints_by_version = _direction_hints_by_version(session, version_ids)
+    if timings is not None:
+        timings["direction_hints_ms"] = round((time.perf_counter() - started) * 1000)
+
     return tuple(
         RouteCandidateRow(
             route_id=str(row["route_id"]),

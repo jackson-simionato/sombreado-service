@@ -50,9 +50,16 @@ class CurrentRouteReadService:
         self._store = store
 
     async def search_route_candidates(self, *, query: str, limit: int) -> list[RouteCandidate]:
+        query_timings: dict[str, int] = {}
         rows = await self._run_session(
             "search_route_candidates",
-            lambda session: search_route_candidates(session, query=query, limit=limit),
+            lambda session: search_route_candidates(
+                session,
+                query=query,
+                limit=limit,
+                timings=query_timings,
+            ),
+            query_timings=query_timings,
         )
         return [_to_route_candidate(row) for row in rows]
 
@@ -152,7 +159,13 @@ class CurrentRouteReadService:
             segments=[_to_route_segment(segment) for segment in row.segments],
         )
 
-    async def _run_session(self, operation_name: str, operation: Callable[[Session], _T]) -> _T:
+    async def _run_session(
+        self,
+        operation_name: str,
+        operation: Callable[[Session], _T],
+        *,
+        query_timings: dict[str, int] | None = None,
+    ) -> _T:
         def run() -> _T:
             with self._store.session() as session:
                 started = time.perf_counter()
@@ -162,12 +175,15 @@ class CurrentRouteReadService:
                 started = time.perf_counter()
                 result = operation(session)
                 query_ms = round((time.perf_counter() - started) * 1000)
-            logger.info(
-                "db_session operation=%s connect_ms=%s query_ms=%s",
-                operation_name,
-                connect_ms,
-                query_ms,
-            )
+            timing_fields = f"connect_ms={connect_ms} query_ms={query_ms}"
+            if query_timings:
+                timing_fields = " ".join(
+                    [
+                        timing_fields,
+                        *(f"{name}={value}" for name, value in query_timings.items()),
+                    ]
+                )
+            logger.info("db_session operation=%s %s", operation_name, timing_fields)
             return result
 
         return await asyncio.to_thread(run)
