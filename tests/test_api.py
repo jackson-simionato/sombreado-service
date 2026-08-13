@@ -10,6 +10,7 @@ from sombreado.api.routes.nearby import get_discovery_service, get_route_service
 from sombreado.api.routes.route_candidates import get_route_service as get_route_candidate_service
 from sombreado.api.schemas import DirectionChoice, RouteCandidate
 from sombreado.domain.schemas import AdviceMode, RouteSegment
+from sombreado.route_reads.current import DirectionChoicesContext
 
 
 class FakeRouteService:
@@ -39,6 +40,18 @@ class FakeRouteService:
                 ),
             ]
         return []
+
+    async def load_direction_choices_for_route(self, *, route_id, requested_route_version_id=None):
+        current_route_version_id = await self.load_current_route_version_id(route_id)
+        if current_route_version_id is None:
+            return DirectionChoicesContext(status="route_not_found")
+        if requested_route_version_id is not None and current_route_version_id != requested_route_version_id:
+            return DirectionChoicesContext(status="route_version_stale")
+        return DirectionChoicesContext(
+            status="ok",
+            route_version_id=current_route_version_id,
+            directions=await self.load_direction_choices(route_version_id=current_route_version_id),
+        )
 
     async def load_current_route_segments(self, *, route_version_id, route_direction_id):
         if str(route_direction_id) == "00000000-0000-0000-0000-000000000003":

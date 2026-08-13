@@ -27,19 +27,21 @@ async def route_directions(
 ) -> RouteDirectionsResponse:
     parsed_route_id = parse_public_uuid(route_id)
     route_version_id = parse_public_uuid(route_version_id_text) if route_version_id_text is not None else None
-    current_route_version_id = await route_service.load_current_route_version_id(parsed_route_id)
-    if current_route_version_id is None:
-        raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
-    if route_version_id is not None and current_route_version_id != route_version_id:
+    context = await route_service.load_direction_choices_for_route(
+        route_id=parsed_route_id,
+        requested_route_version_id=route_version_id,
+    )
+    if context.status == "route_version_stale":
         raise PublicApiError(
             status_code=409,
             code="routeVersionStale",
             message="Selected route version is no longer current.",
         )
-    directions = await route_service.load_direction_choices(route_version_id=current_route_version_id)
+    if context.status != "ok" or context.route_version_id is None:
+        raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
     return RouteDirectionsResponse(
-        route_version_id=current_route_version_id,
-        directions=to_direction_choices(directions),
+        route_version_id=context.route_version_id,
+        directions=to_direction_choices(context.directions),
     )
 
 

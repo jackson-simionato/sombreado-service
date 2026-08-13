@@ -116,3 +116,41 @@ async def test_load_advice_route_context_uses_one_db_session(caplog, monkeypatch
     records = [record for record in caplog.records if "db_session operation=" in record.getMessage()]
     assert len(records) == 1
     assert "operation=load_advice_route_context" in records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_load_direction_choices_for_route_uses_one_db_session(caplog, monkeypatch):
+    from sombreado.store.discovery import DirectionChoiceRow, DirectionChoicesContextRow
+
+    store = _FakeStore()
+    service = CurrentRouteReadService(store)
+    monkeypatch.setattr(
+        "sombreado.route_reads.current.load_direction_choices_for_route",
+        lambda *_args, **_kwargs: DirectionChoicesContextRow(
+            status="ok",
+            route_version_id="00000000-0000-0000-0000-000000000002",
+            directions=(
+                DirectionChoiceRow(
+                    route_direction_id="00000000-0000-0000-0000-000000000003",
+                    sequence=1,
+                    name="Centro > Lagoa",
+                    direction_kind="ida",
+                    departure_labels=("Saida TICEN",),
+                ),
+            ),
+        ),
+    )
+
+    with caplog.at_level(logging.INFO):
+        context = await service.load_direction_choices_for_route(
+            route_id=UUID("00000000-0000-0000-0000-000000000001"),
+            requested_route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+        )
+
+    assert context.status == "ok"
+    assert context.route_version_id == UUID("00000000-0000-0000-0000-000000000002")
+    assert len(context.directions) == 1
+    assert store.session_obj.connection_calls == 1
+    records = [record for record in caplog.records if "db_session operation=" in record.getMessage()]
+    assert len(records) == 1
+    assert "operation=load_direction_choices_for_route" in records[0].getMessage()
