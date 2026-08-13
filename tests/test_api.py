@@ -10,6 +10,7 @@ from sombreado.api.routes.nearby import get_discovery_service, get_route_service
 from sombreado.api.routes.route_candidates import get_route_service as get_route_candidate_service
 from sombreado.api.schemas import DirectionChoice, RouteCandidate
 from sombreado.domain.schemas import AdviceMode, RouteSegment
+from sombreado.route_reads.current import AdviceRouteContext, DirectionChoicesContext
 
 
 class FakeRouteService:
@@ -40,6 +41,18 @@ class FakeRouteService:
             ]
         return []
 
+    async def load_direction_choices_for_route(self, *, route_id, requested_route_version_id=None):
+        current_route_version_id = await self.load_current_route_version_id(route_id)
+        if current_route_version_id is None:
+            return DirectionChoicesContext(status="route_not_found")
+        if requested_route_version_id is not None and current_route_version_id != requested_route_version_id:
+            return DirectionChoicesContext(status="route_version_stale")
+        return DirectionChoicesContext(
+            status="ok",
+            route_version_id=current_route_version_id,
+            directions=await self.load_direction_choices(route_version_id=current_route_version_id),
+        )
+
     async def load_current_route_segments(self, *, route_version_id, route_direction_id):
         if str(route_direction_id) == "00000000-0000-0000-0000-000000000003":
             return [
@@ -59,6 +72,25 @@ class FakeRouteService:
             "00000000-0000-0000-0000-000000000003",
             "00000000-0000-0000-0000-000000000004",
         }
+
+    async def load_route_geometry_context(self, *, route_id, route_version_id, route_direction_id):
+        current_route_version_id = await self.load_current_route_version_id(route_id)
+        if current_route_version_id is None:
+            return AdviceRouteContext(status="route_not_found", segments=[])
+        if current_route_version_id != route_version_id:
+            return AdviceRouteContext(status="route_version_stale", segments=[])
+        if not await self.route_direction_belongs_to_version(
+            route_version_id=route_version_id,
+            route_direction_id=route_direction_id,
+        ):
+            return AdviceRouteContext(status="route_direction_not_found", segments=[])
+        return AdviceRouteContext(
+            status="ok",
+            segments=await self.load_current_route_segments(
+                route_version_id=route_version_id,
+                route_direction_id=route_direction_id,
+            ),
+        )
 
     async def search_route_candidates(self, *, query, limit):
         self.last_search_route_candidates_request = {"query": query, "limit": limit}

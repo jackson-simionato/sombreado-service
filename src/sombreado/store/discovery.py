@@ -23,6 +23,7 @@ from sombreado.store.models import (
 PUBLIC_DIRECTION_LABEL_CONFIDENCES = ("high", "medium")
 
 AdviceRouteContextStatus = Literal["route_not_found", "route_version_stale", "route_direction_not_found", "ok"]
+DirectionChoicesContextStatus = Literal["route_not_found", "route_version_stale", "ok"]
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,15 @@ class AdviceRouteContextRow:
 
     status: AdviceRouteContextStatus
     segments: tuple[RouteSegmentRow, ...] = ()
+
+
+@dataclass(frozen=True)
+class DirectionChoicesContextRow:
+    """Single-session result for Direction Choices version lookup + choices (#114)."""
+
+    status: DirectionChoicesContextStatus
+    route_version_id: str | None = None
+    directions: tuple[DirectionChoiceRow, ...] = ()
 
 
 def resolve_advice_route_context_status(
@@ -428,6 +438,25 @@ def load_direction_choices(
     kind_order = {"ida": 0, "volta": 1, None: 2}
     rows.sort(key=lambda direction: (kind_order.get(direction.direction_kind, 2), direction.sequence))
     return tuple(rows)
+
+
+def load_direction_choices_for_route(
+    session: Session,
+    *,
+    route_id: str,
+    requested_route_version_id: str | None = None,
+) -> DirectionChoicesContextRow:
+    """Load current version and Direction Choices in one session (#114)."""
+    current_route_version_id = load_current_route_version_id(session, route_id)
+    if current_route_version_id is None:
+        return DirectionChoicesContextRow(status="route_not_found")
+    if requested_route_version_id is not None and current_route_version_id != requested_route_version_id:
+        return DirectionChoicesContextRow(status="route_version_stale")
+    return DirectionChoicesContextRow(
+        status="ok",
+        route_version_id=current_route_version_id,
+        directions=load_direction_choices(session, route_version_id=current_route_version_id),
+    )
 
 
 def route_direction_belongs_to_version(
