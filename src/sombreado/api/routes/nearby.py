@@ -59,32 +59,29 @@ async def route_geometry(
     parsed_route_direction_id = parse_public_uuid(route_direction_id)
     route_version_id = parse_public_uuid(route_version_id_text)
 
-    current_route_version_id = await route_service.load_current_route_version_id(parsed_route_id)
-    if current_route_version_id is None:
-        raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
-    if current_route_version_id != route_version_id:
+    context = await route_service.load_route_geometry_context(
+        route_id=parsed_route_id,
+        route_version_id=route_version_id,
+        route_direction_id=parsed_route_direction_id,
+    )
+    if context.status == "route_version_stale":
         raise PublicApiError(
             status_code=409,
             code="routeVersionStale",
             message="Selected route version is no longer current.",
         )
-    if not await route_service.route_direction_belongs_to_version(
-        route_version_id=route_version_id,
-        route_direction_id=parsed_route_direction_id,
-    ):
+    if context.status == "route_direction_not_found":
         raise PublicApiError(
             status_code=404,
             code="routeDirectionNotFound",
             message="Current route direction was not found.",
         )
+    if context.status != "ok":
+        raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
 
-    segments = await route_service.load_current_route_segments(
-        route_version_id=route_version_id,
-        route_direction_id=parsed_route_direction_id,
-    )
     return RouteGeometryResponse(
         route_id=parsed_route_id,
         route_version_id=route_version_id,
         route_direction_id=parsed_route_direction_id,
-        polyline=to_polyline(flatten_route_polyline(segments)),
+        polyline=to_polyline(flatten_route_polyline(context.segments)),
     )
