@@ -523,16 +523,25 @@ def load_advice_route_context(
     route_id: str,
     route_version_id: str,
     route_direction_id: str,
+    timings: dict[str, int] | None = None,
 ) -> AdviceRouteContextRow:
     """Load advice prerequisites in one session: current version, membership, segments."""
+    started = time.perf_counter()
     current_route_version_id = load_current_route_version_id(session, route_id)
+    if timings is not None:
+        timings["version_ms"] = round((time.perf_counter() - started) * 1000)
+
     direction_belongs = False
     if current_route_version_id == route_version_id:
+        started = time.perf_counter()
         direction_belongs = route_direction_belongs_to_version(
             session,
             route_version_id=route_version_id,
             route_direction_id=route_direction_id,
         )
+        if timings is not None:
+            timings["membership_ms"] = round((time.perf_counter() - started) * 1000)
+
     status = resolve_advice_route_context_status(
         current_route_version_id=current_route_version_id,
         requested_route_version_id=route_version_id,
@@ -540,13 +549,18 @@ def load_advice_route_context(
     )
     if status != "ok":
         return AdviceRouteContextRow(status=status)
+
+    started = time.perf_counter()
+    segments = load_current_route_segments(
+        session,
+        route_version_id=route_version_id,
+        route_direction_id=route_direction_id,
+    )
+    if timings is not None:
+        timings["segments_ms"] = round((time.perf_counter() - started) * 1000)
     return AdviceRouteContextRow(
         status="ok",
-        segments=load_current_route_segments(
-            session,
-            route_version_id=route_version_id,
-            route_direction_id=route_direction_id,
-        ),
+        segments=segments,
     )
 
 
