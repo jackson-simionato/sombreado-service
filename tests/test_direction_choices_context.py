@@ -91,3 +91,42 @@ def test_load_direction_choices_for_route_loads_choices_in_same_session():
     assert result.directions[0].route_direction_id == "dir-ida"
     # version lookup + direction rows + departure labels
     assert session.execute_calls == 3
+
+
+def test_load_direction_choices_for_route_records_version_ms_on_not_found():
+    session = _FakeSession(current_version_id=None, direction_rows=[])
+    timings: dict[str, int] = {}
+
+    result = load_direction_choices_for_route(session, route_id="route-missing", timings=timings)
+
+    assert result.status == "route_not_found"
+    assert "version_ms" in timings
+    assert "choices_ms" not in timings
+    assert "labels_ms" not in timings
+
+
+def test_load_direction_choices_for_route_records_version_choices_labels_ms_on_ok():
+    session = _FakeSession(
+        current_version_id="version-a",
+        direction_rows=[
+            SimpleNamespace(
+                route_direction_id="dir-ida",
+                sequence=1,
+                name="Centro > Lagoa",
+                direction_kind="ida",
+            ),
+        ],
+    )
+    timings: dict[str, int] = {}
+
+    result = load_direction_choices_for_route(
+        session,
+        route_id="route-a",
+        requested_route_version_id="version-a",
+        timings=timings,
+    )
+
+    assert result.status == "ok"
+    assert "version_ms" in timings
+    assert "choices_ms" in timings
+    assert "labels_ms" in timings

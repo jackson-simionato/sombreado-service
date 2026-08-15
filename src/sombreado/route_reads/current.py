@@ -114,6 +114,7 @@ class CurrentRouteReadService:
         requested_route_version_id: UUID | None = None,
     ) -> DirectionChoicesContext:
         """Resolve current version and load Direction Choices in one DB session (#114)."""
+        query_timings: dict[str, int] = {}
         row = await self._run_session(
             "load_direction_choices_for_route",
             lambda session: load_direction_choices_for_route(
@@ -122,7 +123,9 @@ class CurrentRouteReadService:
                 requested_route_version_id=(
                     None if requested_route_version_id is None else str(requested_route_version_id)
                 ),
+                timings=query_timings,
             ),
+            query_timings=query_timings,
         )
         if row.status != "ok" or row.route_version_id is None:
             return DirectionChoicesContext(status=row.status)
@@ -201,6 +204,7 @@ class CurrentRouteReadService:
         route_version_id: UUID,
         route_direction_id: UUID,
     ) -> AdviceRouteContext:
+        query_timings: dict[str, int] = {}
         row = await self._run_session(
             operation_name,
             lambda session: load_advice_route_context(
@@ -208,7 +212,9 @@ class CurrentRouteReadService:
                 route_id=str(route_id),
                 route_version_id=str(route_version_id),
                 route_direction_id=str(route_direction_id),
+                timings=query_timings,
             ),
+            query_timings=query_timings,
         )
         return AdviceRouteContext(
             status=row.status,
