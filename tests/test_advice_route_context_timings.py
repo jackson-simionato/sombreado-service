@@ -1,4 +1,4 @@
-"""Advice/geometry store context: one SQL round-trip (#124)."""
+"""Advice/geometry store context: one-row direction denorm (#130)."""
 
 from __future__ import annotations
 
@@ -42,9 +42,9 @@ def test_load_advice_route_context_not_found_one_execute():
     assert session.execute_calls == 1
     assert timings.get("version_ms") == 0
     assert timings.get("membership_ms") == 0
-    assert "segments_ms" in timings
-    assert timings["segment_count"] == 0
-    assert timings["geometry_bytes"] == 0
+    assert "direction_ms" in timings
+    assert timings["advice_segments_count"] == 0
+    assert timings["direction_geometry_bytes"] == 0
     assert "assemble_ms" in timings
 
 
@@ -55,12 +55,8 @@ def test_load_advice_route_context_stale_one_execute():
             {
                 "route_version_id": "version-current",
                 "route_direction_id": "d1",
-                "public_id": None,
-                "sequence": None,
-                "geometry": None,
-                "bearing_degrees": None,
-                "distance_meters": None,
-                "cumulative_distance_meters": None,
+                "direction_geometry": "SRID=4326;LINESTRING(-48.5 -27.6, -48.49 -27.6)",
+                "advice_segments": [],
             }
         ]
     )
@@ -77,9 +73,9 @@ def test_load_advice_route_context_stale_one_execute():
     assert session.execute_calls == 1
     assert timings.get("version_ms") == 0
     assert timings.get("membership_ms") == 0
-    assert "segments_ms" in timings
-    assert timings["segment_count"] == 0
-    assert timings["geometry_bytes"] == 0
+    assert "direction_ms" in timings
+    assert timings["advice_segments_count"] == 0
+    assert timings["direction_geometry_bytes"] == 0
     assert "assemble_ms" in timings
 
 
@@ -90,12 +86,8 @@ def test_load_advice_route_context_direction_not_found_one_execute():
             {
                 "route_version_id": "v1",
                 "route_direction_id": None,
-                "public_id": None,
-                "sequence": None,
-                "geometry": None,
-                "bearing_degrees": None,
-                "distance_meters": None,
-                "cumulative_distance_meters": None,
+                "direction_geometry": None,
+                "advice_segments": None,
             }
         ]
     )
@@ -110,25 +102,30 @@ def test_load_advice_route_context_direction_not_found_one_execute():
 
     assert row.status == "route_direction_not_found"
     assert session.execute_calls == 1
-    assert timings["segment_count"] == 0
-    assert timings["geometry_bytes"] == 0
+    assert timings["advice_segments_count"] == 0
+    assert timings["direction_geometry_bytes"] == 0
     assert "assemble_ms" in timings
 
 
 def test_load_advice_route_context_ok_one_execute_with_segments():
     timings: dict[str, int] = {}
-    wkt = "LINESTRING(-48.5 -27.6, -48.49 -27.6)"
+    direction_geometry = "SRID=4326;LINESTRING(-48.5 -27.6, -48.49 -27.6)"
     session = _FakeSession(
         [
             {
                 "route_version_id": "v1",
                 "route_direction_id": "d1",
-                "public_id": "seg-1",
-                "sequence": 1,
-                "geometry": wkt,
-                "bearing_degrees": 90.0,
-                "distance_meters": 986.0,
-                "cumulative_distance_meters": 986.0,
+                "direction_geometry": direction_geometry,
+                "advice_segments": [
+                    {
+                        "public_id": "seg-1",
+                        "sequence": 1,
+                        "coordinates": [[-48.5, -27.6], [-48.49, -27.6]],
+                        "bearing_degrees": 90.0,
+                        "distance_meters": 986.0,
+                        "cumulative_distance_meters": 986.0,
+                    }
+                ],
             }
         ]
     )
@@ -142,14 +139,15 @@ def test_load_advice_route_context_ok_one_execute_with_segments():
     )
 
     assert row.status == "ok"
+    assert row.direction_geometry == direction_geometry
     assert len(row.segments) == 1
     assert row.segments[0].public_id == "seg-1"
     assert session.execute_calls == 1
     assert timings.get("version_ms") == 0
     assert timings.get("membership_ms") == 0
-    assert "segments_ms" in timings
-    assert timings["segment_count"] == 1
-    assert timings["geometry_bytes"] == len(wkt.encode("utf-8"))
+    assert "direction_ms" in timings
+    assert timings["advice_segments_count"] == 1
+    assert timings["direction_geometry_bytes"] == len(direction_geometry.encode("utf-8"))
     assert "assemble_ms" in timings
 
 
@@ -160,12 +158,8 @@ def test_load_advice_route_context_records_zero_payload_when_membership_ok_witho
             {
                 "route_version_id": "v1",
                 "route_direction_id": "d1",
-                "public_id": None,
-                "sequence": None,
-                "geometry": None,
-                "bearing_degrees": None,
-                "distance_meters": None,
-                "cumulative_distance_meters": None,
+                "direction_geometry": None,
+                "advice_segments": [],
             }
         ]
     )
@@ -180,6 +174,6 @@ def test_load_advice_route_context_records_zero_payload_when_membership_ok_witho
 
     assert row.status == "ok"
     assert row.segments == ()
-    assert timings["segment_count"] == 0
-    assert timings["geometry_bytes"] == 0
+    assert timings["advice_segments_count"] == 0
+    assert timings["direction_geometry_bytes"] == 0
     assert "assemble_ms" in timings

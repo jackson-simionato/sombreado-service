@@ -55,3 +55,10 @@ def test_segments_after_projection_trims_the_first_segment_to_remaining_distance
     assert [segment.sequence for segment in upcoming] == [1, 2]
     assert upcoming[0].distance_meters == 50
     assert upcoming[1].distance_meters == 25
+
+
+def test_polyline_from_linestring_wkt_converts_lng_lat_to_lat_lng_and_dedupes():
+    from sombreado.domain.geometry import polyline_from_linestring_wkt
+
+    points = polyline_from_linestring_wkt("SRID=4326;LINESTRING(-48.5 -27.6, -48.5 -27.6, -48.49 -27.6)")
+    assert [(p.lat, p.lng) for p in points] == [(-27.6, -48.5), (-27.6, -48.49)]

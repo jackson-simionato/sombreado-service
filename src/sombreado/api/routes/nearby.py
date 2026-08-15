@@ -9,7 +9,7 @@ from sombreado.api.schemas import (
     RouteDirectionsResponse,
     RouteGeometryResponse,
 )
-from sombreado.domain.geometry import flatten_route_polyline
+from sombreado.domain.geometry import polyline_from_linestring_wkt
 from sombreado.route_reads.current import CurrentRouteReadService
 
 router = APIRouter(prefix="/v1", tags=["routes"])
@@ -79,9 +79,14 @@ async def route_geometry(
     if context.status != "ok":
         raise PublicApiError(status_code=404, code="routeNotFound", message="Current route was not found.")
 
+    if not context.direction_geometry:
+        polyline: list = []
+    else:
+        polyline = to_polyline(polyline_from_linestring_wkt(context.direction_geometry))
+
     return RouteGeometryResponse(
         route_id=parsed_route_id,
         route_version_id=route_version_id,
         route_direction_id=parsed_route_direction_id,
-        polyline=to_polyline(flatten_route_polyline(context.segments)),
+        polyline=polyline,
     )

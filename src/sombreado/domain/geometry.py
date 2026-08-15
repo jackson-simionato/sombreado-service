@@ -41,3 +41,14 @@ def flatten_route_polyline(segments: list[RouteSegment]) -> list[LatLngPoint]:
                 continue
             polyline.append(point)
     return polyline
+
+
+def polyline_from_linestring_wkt(value: str) -> list[LatLngPoint]:
+    """Passenger polyline from a direction EWKT/WKT LINESTRING (lat/lng, deduped)."""
+    polyline: list[LatLngPoint] = []
+    for lng, lat in parse_linestring_wkt(value):
+        point = LatLngPoint(lat=lat, lng=lng)
+        if polyline and polyline[-1] == point:
+            continue
+        polyline.append(point)
+    return polyline
