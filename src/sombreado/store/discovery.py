@@ -415,15 +415,23 @@ def load_direction_choices(
     session: Session,
     *,
     route_version_id: str,
+    timings: dict[str, int] | None = None,
 ) -> tuple[DirectionChoiceRow, ...]:
     """Return selectable Direction Choices for a current-generation route version."""
+    started = time.perf_counter()
     directions = session.execute(direction_choices_statement(route_version_id=route_version_id)).all()
+    if timings is not None:
+        timings["choices_ms"] = round((time.perf_counter() - started) * 1000)
+
+    started = time.perf_counter()
     labels_by_direction: dict[str, list[str]] = {}
     for direction_id, label in session.execute(departure_labels_statement(route_version_id=route_version_id)):
         bucket = labels_by_direction.setdefault(str(direction_id), [])
         text_label = str(label)
         if text_label not in bucket:
             bucket.append(text_label)
+    if timings is not None:
+        timings["labels_ms"] = round((time.perf_counter() - started) * 1000)
 
     rows = [
         DirectionChoiceRow(
@@ -445,9 +453,13 @@ def load_direction_choices_for_route(
     *,
     route_id: str,
     requested_route_version_id: str | None = None,
+    timings: dict[str, int] | None = None,
 ) -> DirectionChoicesContextRow:
     """Load current version and Direction Choices in one session (#114)."""
+    started = time.perf_counter()
     current_route_version_id = load_current_route_version_id(session, route_id)
+    if timings is not None:
+        timings["version_ms"] = round((time.perf_counter() - started) * 1000)
     if current_route_version_id is None:
         return DirectionChoicesContextRow(status="route_not_found")
     if requested_route_version_id is not None and current_route_version_id != requested_route_version_id:
@@ -455,7 +467,11 @@ def load_direction_choices_for_route(
     return DirectionChoicesContextRow(
         status="ok",
         route_version_id=current_route_version_id,
-        directions=load_direction_choices(session, route_version_id=current_route_version_id),
+        directions=load_direction_choices(
+            session,
+            route_version_id=current_route_version_id,
+            timings=timings,
+        ),
     )
 
 
