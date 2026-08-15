@@ -42,6 +42,32 @@ class _FakeStore:
         yield self.session_obj
 
 
+class _FakeResultWithFirst(_FakeResult):
+    def __init__(self, first_row) -> None:
+        self._first_row = first_row
+
+    def first(self):
+        return self._first_row
+
+
+class _VersionThenEmptySession:
+    """Version lookup returns an id; later executes return empty directions/labels."""
+
+    def __init__(self) -> None:
+        self.connection_calls = 0
+        self._calls = 0
+
+    def connection(self):
+        self.connection_calls += 1
+        return object()
+
+    def execute(self, *_args, **_kwargs):
+        self._calls += 1
+        if self._calls == 1:
+            return _FakeResultWithFirst(("00000000-0000-0000-0000-000000000002",))
+        return _FakeResult()
+
+
 @pytest.mark.asyncio
 async def test_run_session_logs_connect_and_query_ms(caplog):
     store = _FakeStore()
@@ -154,6 +180,28 @@ async def test_load_direction_choices_for_route_uses_one_db_session(caplog, monk
     records = [record for record in caplog.records if "db_session operation=" in record.getMessage()]
     assert len(records) == 1
     assert "operation=load_direction_choices_for_route" in records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_load_direction_choices_for_route_logs_query_ms_split(caplog):
+    store = _FakeStore()
+    store.session_obj = _VersionThenEmptySession()
+    service = CurrentRouteReadService(store)
+
+    with caplog.at_level(logging.INFO):
+        context = await service.load_direction_choices_for_route(
+            route_id=UUID("00000000-0000-0000-0000-000000000001"),
+            requested_route_version_id=UUID("00000000-0000-0000-0000-000000000002"),
+        )
+
+    assert context.status == "ok"
+    records = [record for record in caplog.records if "db_session operation=" in record.getMessage()]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "operation=load_direction_choices_for_route" in message
+    assert "version_ms=" in message
+    assert "choices_ms=" in message
+    assert "labels_ms=" in message
 
 
 @pytest.mark.asyncio
