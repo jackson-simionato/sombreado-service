@@ -43,6 +43,9 @@ def test_load_advice_route_context_not_found_one_execute():
     assert timings.get("version_ms") == 0
     assert timings.get("membership_ms") == 0
     assert "segments_ms" in timings
+    assert timings["segment_count"] == 0
+    assert timings["geometry_bytes"] == 0
+    assert "assemble_ms" in timings
 
 
 def test_load_advice_route_context_stale_one_execute():
@@ -75,6 +78,9 @@ def test_load_advice_route_context_stale_one_execute():
     assert timings.get("version_ms") == 0
     assert timings.get("membership_ms") == 0
     assert "segments_ms" in timings
+    assert timings["segment_count"] == 0
+    assert timings["geometry_bytes"] == 0
+    assert "assemble_ms" in timings
 
 
 def test_load_advice_route_context_direction_not_found_one_execute():
@@ -104,10 +110,14 @@ def test_load_advice_route_context_direction_not_found_one_execute():
 
     assert row.status == "route_direction_not_found"
     assert session.execute_calls == 1
+    assert timings["segment_count"] == 0
+    assert timings["geometry_bytes"] == 0
+    assert "assemble_ms" in timings
 
 
 def test_load_advice_route_context_ok_one_execute_with_segments():
     timings: dict[str, int] = {}
+    wkt = "LINESTRING(-48.5 -27.6, -48.49 -27.6)"
     session = _FakeSession(
         [
             {
@@ -115,7 +125,7 @@ def test_load_advice_route_context_ok_one_execute_with_segments():
                 "route_direction_id": "d1",
                 "public_id": "seg-1",
                 "sequence": 1,
-                "geometry": "LINESTRING(-48.5 -27.6, -48.49 -27.6)",
+                "geometry": wkt,
                 "bearing_degrees": 90.0,
                 "distance_meters": 986.0,
                 "cumulative_distance_meters": 986.0,
@@ -138,3 +148,38 @@ def test_load_advice_route_context_ok_one_execute_with_segments():
     assert timings.get("version_ms") == 0
     assert timings.get("membership_ms") == 0
     assert "segments_ms" in timings
+    assert timings["segment_count"] == 1
+    assert timings["geometry_bytes"] == len(wkt.encode("utf-8"))
+    assert "assemble_ms" in timings
+
+
+def test_load_advice_route_context_records_zero_payload_when_membership_ok_without_segments():
+    timings: dict[str, int] = {}
+    session = _FakeSession(
+        [
+            {
+                "route_version_id": "v1",
+                "route_direction_id": "d1",
+                "public_id": None,
+                "sequence": None,
+                "geometry": None,
+                "bearing_degrees": None,
+                "distance_meters": None,
+                "cumulative_distance_meters": None,
+            }
+        ]
+    )
+
+    row = load_advice_route_context(
+        session,
+        route_id="r1",
+        route_version_id="v1",
+        route_direction_id="d1",
+        timings=timings,
+    )
+
+    assert row.status == "ok"
+    assert row.segments == ()
+    assert timings["segment_count"] == 0
+    assert timings["geometry_bytes"] == 0
+    assert "assemble_ms" in timings
