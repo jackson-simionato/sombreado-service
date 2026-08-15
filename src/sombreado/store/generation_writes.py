@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
 import psycopg
+from psycopg.types.json import Json
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
 
@@ -161,9 +162,10 @@ def insert_route_directions(connection: psycopg.Connection, rows: Sequence[Mappi
         cursor.executemany(
             """
             INSERT INTO route_directions(
-                id, route_version_id, name, direction_kind, sequence, geometry
+                id, route_version_id, name, direction_kind, sequence, geometry, advice_segments
             ) VALUES (
-                %(id)s, %(route_version_id)s, %(name)s, %(direction_kind)s, %(sequence)s, %(geometry)s
+                %(id)s, %(route_version_id)s, %(name)s, %(direction_kind)s, %(sequence)s,
+                %(geometry)s, %(advice_segments)s
             )
             """,
             [
@@ -174,6 +176,7 @@ def insert_route_directions(connection: psycopg.Connection, rows: Sequence[Mappi
                     "direction_kind": row["direction_kind"],
                     "sequence": row["sequence"],
                     "geometry": row["geometry"],
+                    "advice_segments": Json(row.get("advice_segments", [])),
                 }
                 for row in rows
             ],
@@ -398,6 +401,25 @@ def validate_generation(connection: psycopg.Connection, generation_id: str) -> N
     ).fetchone()
     if invalid_membership is not None and int(invalid_membership[0]):
         raise RuntimeError(f"generation route/version membership is invalid: {generation_id}")
+
+    mismatch = connection.execute(
+        """
+        SELECT count(*)
+        FROM dataset_route_versions AS member
+        JOIN route_directions AS direction
+            ON direction.route_version_id = member.route_version_id
+        WHERE member.generation_id = %(id)s
+          AND jsonb_array_length(direction.advice_segments)
+              <> (
+                  SELECT count(*)
+                  FROM route_segments AS segment
+                  WHERE segment.route_direction_id = direction.id
+              )
+        """,
+        {"id": generation_id},
+    ).fetchone()
+    if mismatch is not None and int(mismatch[0]):
+        raise RuntimeError(f"generation advice_segments denorm mismatch: {generation_id}")
 
 
 def pointer(connection: psycopg.Connection, role: str) -> str | None:
