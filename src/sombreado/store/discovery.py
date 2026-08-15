@@ -223,6 +223,39 @@ def direction_choices_statement(*, route_version_id: str) -> Select:
     )
 
 
+def direction_choices_for_route_statement(*, route_id: str) -> Select:
+    """One round-trip: current version for route + directions + public labels (#124)."""
+    return (
+        select(
+            DatasetRouteVersionRecord.route_version_id.label("route_version_id"),
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteDirectionRecord.sequence,
+            RouteDirectionRecord.name,
+            RouteDirectionRecord.direction_kind,
+            ServiceDirectionRecord.departure_label,
+        )
+        .select_from(DatasetRouteVersionRecord)
+        .join(DatasetPointerRecord, _current_pointer_join())
+        .outerjoin(
+            RouteDirectionRecord,
+            RouteDirectionRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
+        )
+        .outerjoin(
+            ServiceDirectionRecord,
+            and_(
+                ServiceDirectionRecord.route_direction_id == RouteDirectionRecord.id,
+                ServiceDirectionRecord.route_direction_id.is_not(None),
+                ServiceDirectionRecord.confidence.in_(PUBLIC_DIRECTION_LABEL_CONFIDENCES),
+            ),
+        )
+        .where(DatasetRouteVersionRecord.route_id == route_id)
+        .order_by(
+            RouteDirectionRecord.sequence.asc().nulls_last(),
+            ServiceDirectionRecord.sequence.asc().nulls_last(),
+        )
+    )
+
+
 def departure_labels_statement(*, route_version_id: str) -> Select:
     """Build the ORM select for public departure labels on current directions."""
     return (
@@ -455,23 +488,64 @@ def load_direction_choices_for_route(
     requested_route_version_id: str | None = None,
     timings: dict[str, int] | None = None,
 ) -> DirectionChoicesContextRow:
-    """Load current version and Direction Choices in one session (#114)."""
+    """Load current version and Direction Choices in one SQL round-trip (#124)."""
     started = time.perf_counter()
-    current_route_version_id = load_current_route_version_id(session, route_id)
+    rows = session.execute(direction_choices_for_route_statement(route_id=route_id)).mappings().all()
     if timings is not None:
-        timings["version_ms"] = round((time.perf_counter() - started) * 1000)
-    if current_route_version_id is None:
+        elapsed = round((time.perf_counter() - started) * 1000)
+        timings["version_ms"] = 0
+        timings["choices_ms"] = elapsed
+        timings["labels_ms"] = 0
+
+    if not rows:
         return DirectionChoicesContextRow(status="route_not_found")
+
+    current_route_version_id = str(rows[0]["route_version_id"])
     if requested_route_version_id is not None and current_route_version_id != requested_route_version_id:
         return DirectionChoicesContextRow(status="route_version_stale")
+
+    assembled: dict[str, DirectionChoiceRow] = {}
+    order: list[str] = []
+    labels: dict[str, list[str]] = {}
+    for row in rows:
+        direction_id = row["route_direction_id"]
+        if direction_id is None:
+            continue
+        direction_key = str(direction_id)
+        if direction_key not in assembled:
+            assembled[direction_key] = DirectionChoiceRow(
+                route_direction_id=direction_key,
+                sequence=int(row["sequence"]),
+                name=str(row["name"]),
+                direction_kind=None if row["direction_kind"] is None else str(row["direction_kind"]),
+                departure_labels=(),
+            )
+            order.append(direction_key)
+            labels[direction_key] = []
+        label = row["departure_label"]
+        if label is None:
+            continue
+        text_label = str(label)
+        bucket = labels[direction_key]
+        if text_label not in bucket:
+            bucket.append(text_label)
+
+    directions = [
+        DirectionChoiceRow(
+            route_direction_id=assembled[direction_key].route_direction_id,
+            sequence=assembled[direction_key].sequence,
+            name=assembled[direction_key].name,
+            direction_kind=assembled[direction_key].direction_kind,
+            departure_labels=tuple(labels[direction_key]),
+        )
+        for direction_key in order
+    ]
+    kind_order = {"ida": 0, "volta": 1, None: 2}
+    directions.sort(key=lambda direction: (kind_order.get(direction.direction_kind, 2), direction.sequence))
     return DirectionChoicesContextRow(
         status="ok",
         route_version_id=current_route_version_id,
-        directions=load_direction_choices(
-            session,
-            route_version_id=current_route_version_id,
-            timings=timings,
-        ),
+        directions=tuple(directions),
     )
 
 
