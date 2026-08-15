@@ -16,6 +16,7 @@ from sombreado.store.discovery import (
     direction_hints_statement,
     nearby_route_candidates_statement,
     route_direction_membership_statement,
+    route_geometry_context_statement,
     search_route_candidates_statement,
     search_route_candidates_with_hints_statement,
 )
@@ -89,6 +90,13 @@ def test_direction_choices_for_route_statement_joins_current_pointer():
     assert "dataset_route_versions" in sql
     assert "route_directions" in sql
     assert "service_directions" in sql
+    assert "WHERE dataset_route_versions.route_id = 'route-a'" in sql
+
+
+def test_route_geometry_context_statement_joins_current_pointer():
+    sql = _assert_orm_current_pointer(route_geometry_context_statement(route_id="route-a", route_direction_id="dir-a"))
+    assert "route_segments" in sql
+    assert "route_directions" in sql
     assert "WHERE dataset_route_versions.route_id = 'route-a'" in sql
 
 

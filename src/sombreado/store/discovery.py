@@ -348,6 +348,40 @@ def current_route_segments_statement(*, route_version_id: str, route_direction_i
     )
 
 
+def route_geometry_context_statement(*, route_id: str, route_direction_id: str) -> Select:
+    """One round-trip: current version + direction membership + ordered segments (#124)."""
+    return (
+        select(
+            DatasetRouteVersionRecord.route_version_id.label("route_version_id"),
+            RouteDirectionRecord.id.label("route_direction_id"),
+            RouteSegmentRecord.public_id,
+            RouteSegmentRecord.sequence,
+            RouteSegmentRecord.geometry,
+            RouteSegmentRecord.bearing_degrees,
+            RouteSegmentRecord.distance_meters,
+            RouteSegmentRecord.cumulative_distance_meters,
+        )
+        .select_from(DatasetRouteVersionRecord)
+        .join(DatasetPointerRecord, _current_pointer_join())
+        .outerjoin(
+            RouteDirectionRecord,
+            and_(
+                RouteDirectionRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
+                RouteDirectionRecord.id == route_direction_id,
+            ),
+        )
+        .outerjoin(
+            RouteSegmentRecord,
+            and_(
+                RouteSegmentRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
+                RouteSegmentRecord.route_direction_id == route_direction_id,
+            ),
+        )
+        .where(DatasetRouteVersionRecord.route_id == route_id)
+        .order_by(RouteSegmentRecord.sequence.asc().nulls_last())
+    )
+
+
 def search_route_candidates(
     session: Session,
     *,
@@ -599,23 +633,29 @@ def load_advice_route_context(
     route_direction_id: str,
     timings: dict[str, int] | None = None,
 ) -> AdviceRouteContextRow:
-    """Load advice prerequisites in one session: current version, membership, segments."""
+    """Load advice/geometry prerequisites in one SQL round-trip (#124)."""
     started = time.perf_counter()
-    current_route_version_id = load_current_route_version_id(session, route_id)
-    if timings is not None:
-        timings["version_ms"] = round((time.perf_counter() - started) * 1000)
-
-    direction_belongs = False
-    if current_route_version_id == route_version_id:
-        started = time.perf_counter()
-        direction_belongs = route_direction_belongs_to_version(
-            session,
-            route_version_id=route_version_id,
-            route_direction_id=route_direction_id,
+    rows = (
+        session.execute(
+            route_geometry_context_statement(
+                route_id=route_id,
+                route_direction_id=route_direction_id,
+            )
         )
-        if timings is not None:
-            timings["membership_ms"] = round((time.perf_counter() - started) * 1000)
+        .mappings()
+        .all()
+    )
+    if timings is not None:
+        elapsed = round((time.perf_counter() - started) * 1000)
+        timings["version_ms"] = 0
+        timings["membership_ms"] = 0
+        timings["segments_ms"] = elapsed
 
+    if not rows:
+        return AdviceRouteContextRow(status="route_not_found")
+
+    current_route_version_id = str(rows[0]["route_version_id"])
+    direction_belongs = rows[0]["route_direction_id"] is not None
     status = resolve_advice_route_context_status(
         current_route_version_id=current_route_version_id,
         requested_route_version_id=route_version_id,
@@ -624,18 +664,19 @@ def load_advice_route_context(
     if status != "ok":
         return AdviceRouteContextRow(status=status)
 
-    started = time.perf_counter()
-    segments = load_current_route_segments(
-        session,
-        route_version_id=route_version_id,
-        route_direction_id=route_direction_id,
+    segments = tuple(
+        RouteSegmentRow(
+            public_id=str(row["public_id"]),
+            sequence=int(row["sequence"]),
+            geometry=str(row["geometry"]),
+            bearing_degrees=float(row["bearing_degrees"]),
+            distance_meters=float(row["distance_meters"]),
+            cumulative_distance_meters=float(row["cumulative_distance_meters"]),
+        )
+        for row in rows
+        if row["public_id"] is not None
     )
-    if timings is not None:
-        timings["segments_ms"] = round((time.perf_counter() - started) * 1000)
-    return AdviceRouteContextRow(
-        status="ok",
-        segments=segments,
-    )
+    return AdviceRouteContextRow(status="ok", segments=segments)
 
 
 def _direction_hints_by_version(
