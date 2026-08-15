@@ -43,7 +43,7 @@ Rejected alternatives:
 **Keep**
 
 - `route_segments` (+ `geom` geography) for nearby and as publish input.
-- `route_directions.geometry` (EWKT LINESTRING) as the passenger **Route Geometry** source.
+- `route_directions.geometry` (EWKT LINESTRING) for existing non-passenger uses.
 
 **Add**
 
@@ -66,12 +66,13 @@ Rejected alternatives:
 One shared store statement (same spirit as today’s geometry/advice context):
 
 - Join Generation Store `current` → route version → direction membership.
-- Select `route_directions.geometry` + `route_directions.advice_segments`.
+- Select `route_directions.advice_segments`.
 - Return **one row** (not N segment rows).
 
 Behavior:
 
-- **Geometry endpoint:** parse direction LINESTRING → public `polyline` (lat/lng). Do **not** load `route_segments`. Empty/unusable line with empty denorm → `polyline: []`.
+- **Geometry endpoint:** flatten `advice_segments` coordinates → public `polyline` (lat/lng). Do **not** load `route_segments`. Empty denorm → `polyline: []`.
+  The denorm carries the same coordinates as the segment rows, so the polyline is identical to today; the direction LINESTRING is not used because it is present even for directions published without materialized segments, which must still answer `polyline: []`.
 - **Advice:** hydrate `RouteSegment` list from `advice_segments`; projection, horizons, and sun logic unchanged.
 - Keep distinct `db_session` operation names (`load_route_geometry_context` / `load_advice_route_context`) for warm logs.
 - Timings: one-row fields (e.g. `direction_ms`, denorm payload size) instead of multi-segment `segments_ms` / `segment_count` for this path.
@@ -81,7 +82,7 @@ Behavior:
 
 **Canonical publish**
 
-- When building generation rows, derive `advice_segments` from the same ordered segment materialization that fills `route_segments` (same `public_id` / sequence / coords / bearing / distances).
+- `insert_staged_rows` derives `advice_segments` from the staged `route_segments` rows (same `public_id` / sequence / coords / bearing / distances), so scrape, sample data, and JSON fixture publishes all agree by construction.
 - `insert_route_directions` persists `advice_segments` in the same atomic publish transaction as directions + segments.
 - Validation: fail publish if a direction’s segment set and denorm disagree (both empty is OK; mismatch is not).
 
