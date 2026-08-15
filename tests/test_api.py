@@ -84,23 +84,12 @@ class FakeRouteService:
             route_direction_id=route_direction_id,
         ):
             return AdviceRouteContext(status="route_direction_not_found", segments=[])
-        segments = await self.load_current_route_segments(
-            route_version_id=route_version_id,
-            route_direction_id=route_direction_id,
-        )
-        direction_geometry = None
-        if segments:
-            coords = []
-            for segment in segments:
-                for lng, lat in segment.coordinates:
-                    if coords and coords[-1] == (lng, lat):
-                        continue
-                    coords.append((lng, lat))
-            direction_geometry = "SRID=4326;LINESTRING(" + ", ".join(f"{lng} {lat}" for lng, lat in coords) + ")"
         return AdviceRouteContext(
             status="ok",
-            segments=segments,
-            direction_geometry=direction_geometry,
+            segments=await self.load_current_route_segments(
+                route_version_id=route_version_id,
+                route_direction_id=route_direction_id,
+            ),
         )
 
     async def search_route_candidates(self, *, query, limit):

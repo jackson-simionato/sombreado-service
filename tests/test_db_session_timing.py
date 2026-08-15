@@ -108,7 +108,6 @@ class _AdviceOkFakeSession:
                 {
                     "route_version_id": "00000000-0000-0000-0000-000000000002",
                     "route_direction_id": "00000000-0000-0000-0000-000000000003",
-                    "direction_geometry": None,
                     "advice_segments": [],
                 }
             ]
@@ -311,7 +310,6 @@ async def test_load_route_geometry_context_logs_query_ms_split(caplog):
     assert "membership_ms=" in message
     assert "direction_ms=" in message
     assert "advice_segments_count=" in message
-    assert "direction_geometry_bytes=" in message
     assert "assemble_ms=" in message
 
 
@@ -337,5 +335,4 @@ async def test_load_advice_route_context_logs_query_ms_split(caplog):
     assert "membership_ms=" in message
     assert "direction_ms=" in message
     assert "advice_segments_count=" in message
-    assert "direction_geometry_bytes=" in message
     assert "assemble_ms=" in message

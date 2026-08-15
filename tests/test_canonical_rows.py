@@ -53,14 +53,6 @@ def test_snapshots_to_canonical_rows_materializes_segments_and_membership():
     assert len(rows["route_versions"]) == 1
     assert len(rows["route_directions"]) == 1
     assert rows["route_directions"][0]["geometry"].startswith("SRID=4326;LINESTRING(")
-    direction = rows["route_directions"][0]
-    segments = [s for s in rows["route_segments"] if s["route_direction_id"] == direction["id"]]
-    assert "advice_segments" in direction
-    assert len(direction["advice_segments"]) == len(segments)
-    assert direction["advice_segments"][0]["public_id"] == segments[0]["id"]
-    assert direction["advice_segments"][0]["sequence"] == segments[0]["sequence"]
-    assert direction["advice_segments"][0]["bearing_degrees"] == segments[0]["bearing_degrees"]
-    assert isinstance(direction["advice_segments"][0]["coordinates"][0][0], float)
     assert len(rows["route_segments"]) >= 1
     assert len(rows["service_directions"]) == 1
     assert rows["service_directions"][0]["route_direction_id"] == rows["route_directions"][0]["id"]

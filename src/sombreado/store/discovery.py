@@ -61,7 +61,6 @@ class AdviceRouteContextRow:
 
     status: AdviceRouteContextStatus
     segments: tuple[RouteSegmentRow, ...] = ()
-    direction_geometry: str | None = None
 
 
 @dataclass(frozen=True)
@@ -350,12 +349,11 @@ def current_route_segments_statement(*, route_version_id: str, route_direction_i
 
 
 def route_geometry_context_statement(*, route_id: str, route_direction_id: str) -> Select:
-    """One round-trip: current version + direction membership + denorm geometry/advice."""
+    """One round-trip: current version + direction membership + advice denorm (#130)."""
     return (
         select(
             DatasetRouteVersionRecord.route_version_id.label("route_version_id"),
             RouteDirectionRecord.id.label("route_direction_id"),
-            RouteDirectionRecord.geometry.label("direction_geometry"),
             RouteDirectionRecord.advice_segments.label("advice_segments"),
         )
         .select_from(DatasetRouteVersionRecord)
@@ -663,7 +661,6 @@ def load_advice_route_context(
     if not rows:
         if timings is not None:
             timings["advice_segments_count"] = 0
-            timings["direction_geometry_bytes"] = 0
             timings["assemble_ms"] = 0
         return AdviceRouteContextRow(status="route_not_found")
 
@@ -674,26 +671,18 @@ def load_advice_route_context(
         requested_route_version_id=route_version_id,
         direction_belongs=direction_belongs,
     )
-    direction_geometry_raw = rows[0]["direction_geometry"]
-    direction_geometry = str(direction_geometry_raw) if direction_geometry_raw else None
     if status != "ok":
         if timings is not None:
             timings["advice_segments_count"] = 0
-            timings["direction_geometry_bytes"] = 0
             timings["assemble_ms"] = 0
-        return AdviceRouteContextRow(status=status, direction_geometry=direction_geometry)
+        return AdviceRouteContextRow(status=status)
 
     assemble_started = time.perf_counter()
     segments = _segments_from_advice_denorm(rows[0]["advice_segments"])
     if timings is not None:
         timings["advice_segments_count"] = len(segments)
-        timings["direction_geometry_bytes"] = len(direction_geometry.encode("utf-8")) if direction_geometry else 0
         timings["assemble_ms"] = round((time.perf_counter() - assemble_started) * 1000)
-    return AdviceRouteContextRow(
-        status="ok",
-        segments=segments,
-        direction_geometry=direction_geometry,
-    )
+    return AdviceRouteContextRow(status="ok", segments=segments)
 
 
 def _direction_hints_by_version(

@@ -59,18 +59,6 @@ def snapshots_to_canonical_rows(snapshots: Sequence[RouteSnapshot]) -> Canonical
         for index, direction in enumerate(snapshot.directions, start=1):
             direction_id = str(uuid4())
             direction_id_by_sequence[index] = direction_id
-            materialized = list(materialize_route_segments(direction))
-            advice_segments = [
-                {
-                    "public_id": str(uuid4()),
-                    "sequence": segment.sequence,
-                    "coordinates": [[lon, lat] for lon, lat in segment.coordinates],
-                    "bearing_degrees": segment.bearing_degrees,
-                    "distance_meters": segment.distance_meters,
-                    "cumulative_distance_meters": segment.cumulative_distance_meters,
-                }
-                for segment in materialized
-            ]
             route_directions.append(
                 {
                     "id": direction_id,
@@ -79,13 +67,12 @@ def snapshots_to_canonical_rows(snapshots: Sequence[RouteSnapshot]) -> Canonical
                     "direction_kind": direction.direction_kind,
                     "sequence": index,
                     "geometry": _linestring_wkt(direction),
-                    "advice_segments": advice_segments,
                 }
             )
-            for advice_item, segment in zip(advice_segments, materialized, strict=True):
+            for segment in materialize_route_segments(direction):
                 route_segments.append(
                     {
-                        "id": advice_item["public_id"],
+                        "id": str(uuid4()),
                         "route_version_id": version_id,
                         "route_direction_id": direction_id,
                         "sequence": segment.sequence,

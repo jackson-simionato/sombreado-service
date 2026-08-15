@@ -40,7 +40,6 @@ logger = get_logger(__name__)
 class AdviceRouteContext:
     status: AdviceRouteContextStatus
     segments: list[RouteSegment]
-    direction_geometry: str | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +219,6 @@ class CurrentRouteReadService:
         return AdviceRouteContext(
             status=row.status,
             segments=[_to_route_segment(segment) for segment in row.segments],
-            direction_geometry=row.direction_geometry,
         )
 
     async def _run_session(
