@@ -204,6 +204,7 @@ class CurrentRouteReadService:
         route_version_id: UUID,
         route_direction_id: UUID,
     ) -> AdviceRouteContext:
+        query_timings: dict[str, int] = {}
         row = await self._run_session(
             operation_name,
             lambda session: load_advice_route_context(
@@ -211,7 +212,9 @@ class CurrentRouteReadService:
                 route_id=str(route_id),
                 route_version_id=str(route_version_id),
                 route_direction_id=str(route_direction_id),
+                timings=query_timings,
             ),
+            query_timings=query_timings,
         )
         return AdviceRouteContext(
             status=row.status,
