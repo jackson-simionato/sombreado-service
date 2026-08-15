@@ -652,6 +652,10 @@ def load_advice_route_context(
         timings["segments_ms"] = elapsed
 
     if not rows:
+        if timings is not None:
+            timings["segment_count"] = 0
+            timings["geometry_bytes"] = 0
+            timings["assemble_ms"] = 0
         return AdviceRouteContextRow(status="route_not_found")
 
     current_route_version_id = str(rows[0]["route_version_id"])
@@ -662,21 +666,37 @@ def load_advice_route_context(
         direction_belongs=direction_belongs,
     )
     if status != "ok":
+        if timings is not None:
+            timings["segment_count"] = 0
+            timings["geometry_bytes"] = 0
+            timings["assemble_ms"] = 0
         return AdviceRouteContextRow(status=status)
 
-    segments = tuple(
-        RouteSegmentRow(
-            public_id=str(row["public_id"]),
-            sequence=int(row["sequence"]),
-            geometry=str(row["geometry"]),
-            bearing_degrees=float(row["bearing_degrees"]),
-            distance_meters=float(row["distance_meters"]),
-            cumulative_distance_meters=float(row["cumulative_distance_meters"]),
+    assemble_started = time.perf_counter()
+    segment_count = 0
+    geometry_bytes = 0
+    segments_list: list[RouteSegmentRow] = []
+    for row in rows:
+        if row["public_id"] is None:
+            continue
+        geometry_text = str(row["geometry"])
+        segment_count += 1
+        geometry_bytes += len(geometry_text.encode("utf-8"))
+        segments_list.append(
+            RouteSegmentRow(
+                public_id=str(row["public_id"]),
+                sequence=int(row["sequence"]),
+                geometry=geometry_text,
+                bearing_degrees=float(row["bearing_degrees"]),
+                distance_meters=float(row["distance_meters"]),
+                cumulative_distance_meters=float(row["cumulative_distance_meters"]),
+            )
         )
-        for row in rows
-        if row["public_id"] is not None
-    )
-    return AdviceRouteContextRow(status="ok", segments=segments)
+    if timings is not None:
+        timings["segment_count"] = segment_count
+        timings["geometry_bytes"] = geometry_bytes
+        timings["assemble_ms"] = round((time.perf_counter() - assemble_started) * 1000)
+    return AdviceRouteContextRow(status="ok", segments=tuple(segments_list))
 
 
 def _direction_hints_by_version(

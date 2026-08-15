@@ -314,6 +314,9 @@ async def test_load_route_geometry_context_logs_query_ms_split(caplog):
     assert "version_ms=" in message
     assert "membership_ms=" in message
     assert "segments_ms=" in message
+    assert "segment_count=" in message
+    assert "geometry_bytes=" in message
+    assert "assemble_ms=" in message
 
 
 @pytest.mark.asyncio
@@ -337,3 +340,6 @@ async def test_load_advice_route_context_logs_query_ms_split(caplog):
     assert "version_ms=" in message
     assert "membership_ms=" in message
     assert "segments_ms=" in message
+    assert "segment_count=" in message
+    assert "geometry_bytes=" in message
+    assert "assemble_ms=" in message
