@@ -31,7 +31,7 @@ def test_api_startup_applies_migrations(configured_database: str):
     store = GenerationStore(configured_database)
     with store.connection() as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert version == ("20260731_0001",)
+    assert version == ("20260815_0002",)
 
 
 def test_api_startup_logs_redacted_database_url(monkeypatch: pytest.MonkeyPatch):
@@ -99,7 +99,7 @@ def test_cli_startup_applies_migrations(configured_database: str):
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
         present = connection.execute("SELECT to_regclass('public.scrape_runs') IS NOT NULL").fetchone()[0]
         routes = connection.execute("SELECT to_regclass('public.generation_routes') IS NOT NULL").fetchone()[0]
-    assert version == ("20260731_0001",)
+    assert version == ("20260815_0002",)
     assert present
     assert routes
 

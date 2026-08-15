@@ -93,7 +93,7 @@ class _MappingResult:
 
 
 class _AdviceOkFakeSession:
-    """One combined execute: matching version + membership + empty segments."""
+    """One combined execute: matching version + membership + empty denorm."""
 
     def __init__(self) -> None:
         self.connection_calls = 0
@@ -108,12 +108,7 @@ class _AdviceOkFakeSession:
                 {
                     "route_version_id": "00000000-0000-0000-0000-000000000002",
                     "route_direction_id": "00000000-0000-0000-0000-000000000003",
-                    "public_id": None,
-                    "sequence": None,
-                    "geometry": None,
-                    "bearing_degrees": None,
-                    "distance_meters": None,
-                    "cumulative_distance_meters": None,
+                    "advice_segments": [],
                 }
             ]
         )
@@ -313,9 +308,8 @@ async def test_load_route_geometry_context_logs_query_ms_split(caplog):
     assert "operation=load_route_geometry_context" in message
     assert "version_ms=" in message
     assert "membership_ms=" in message
-    assert "segments_ms=" in message
-    assert "segment_count=" in message
-    assert "geometry_bytes=" in message
+    assert "direction_ms=" in message
+    assert "advice_segments_count=" in message
     assert "assemble_ms=" in message
 
 
@@ -339,7 +333,6 @@ async def test_load_advice_route_context_logs_query_ms_split(caplog):
     assert "operation=load_advice_route_context" in message
     assert "version_ms=" in message
     assert "membership_ms=" in message
-    assert "segments_ms=" in message
-    assert "segment_count=" in message
-    assert "geometry_bytes=" in message
+    assert "direction_ms=" in message
+    assert "advice_segments_count=" in message
     assert "assemble_ms=" in message

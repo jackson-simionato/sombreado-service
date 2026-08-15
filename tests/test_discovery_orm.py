@@ -95,8 +95,9 @@ def test_direction_choices_for_route_statement_joins_current_pointer():
 
 def test_route_geometry_context_statement_joins_current_pointer():
     sql = _assert_orm_current_pointer(route_geometry_context_statement(route_id="route-a", route_direction_id="dir-a"))
-    assert "route_segments" in sql
     assert "route_directions" in sql
+    assert "advice_segments" in sql
+    assert "route_segments" not in sql
     assert "WHERE dataset_route_versions.route_id = 'route-a'" in sql
 
 

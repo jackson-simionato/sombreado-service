@@ -57,7 +57,7 @@ class RouteSegmentRow:
 
 @dataclass(frozen=True)
 class AdviceRouteContextRow:
-    """Single-session result for advice route/version/direction + segments (#99)."""
+    """Single-session result for advice route/version/direction + denorm (#130)."""
 
     status: AdviceRouteContextStatus
     segments: tuple[RouteSegmentRow, ...] = ()
@@ -349,17 +349,12 @@ def current_route_segments_statement(*, route_version_id: str, route_direction_i
 
 
 def route_geometry_context_statement(*, route_id: str, route_direction_id: str) -> Select:
-    """One round-trip: current version + direction membership + ordered segments (#124)."""
+    """One round-trip: current version + direction membership + advice denorm (#130)."""
     return (
         select(
             DatasetRouteVersionRecord.route_version_id.label("route_version_id"),
             RouteDirectionRecord.id.label("route_direction_id"),
-            RouteSegmentRecord.public_id,
-            RouteSegmentRecord.sequence,
-            RouteSegmentRecord.geometry,
-            RouteSegmentRecord.bearing_degrees,
-            RouteSegmentRecord.distance_meters,
-            RouteSegmentRecord.cumulative_distance_meters,
+            RouteDirectionRecord.advice_segments.label("advice_segments"),
         )
         .select_from(DatasetRouteVersionRecord)
         .join(DatasetPointerRecord, _current_pointer_join())
@@ -370,15 +365,7 @@ def route_geometry_context_statement(*, route_id: str, route_direction_id: str) 
                 RouteDirectionRecord.id == route_direction_id,
             ),
         )
-        .outerjoin(
-            RouteSegmentRecord,
-            and_(
-                RouteSegmentRecord.route_version_id == DatasetRouteVersionRecord.route_version_id,
-                RouteSegmentRecord.route_direction_id == route_direction_id,
-            ),
-        )
         .where(DatasetRouteVersionRecord.route_id == route_id)
-        .order_by(RouteSegmentRecord.sequence.asc().nulls_last())
     )
 
 
@@ -625,6 +612,27 @@ def load_current_route_segments(
     )
 
 
+def _segments_from_advice_denorm(raw: object) -> tuple[RouteSegmentRow, ...]:
+    if not raw:
+        return ()
+    items = raw if isinstance(raw, list) else []
+    segments: list[RouteSegmentRow] = []
+    for item in items:
+        coords = item["coordinates"]
+        wkt = "LINESTRING(" + ", ".join(f"{lon} {lat}" for lon, lat in coords) + ")"
+        segments.append(
+            RouteSegmentRow(
+                public_id=str(item["public_id"]),
+                sequence=int(item["sequence"]),
+                geometry=wkt,
+                bearing_degrees=float(item["bearing_degrees"]),
+                distance_meters=float(item["distance_meters"]),
+                cumulative_distance_meters=float(item["cumulative_distance_meters"]),
+            )
+        )
+    return tuple(segments)
+
+
 def load_advice_route_context(
     session: Session,
     *,
@@ -633,7 +641,7 @@ def load_advice_route_context(
     route_direction_id: str,
     timings: dict[str, int] | None = None,
 ) -> AdviceRouteContextRow:
-    """Load advice/geometry prerequisites in one SQL round-trip (#124)."""
+    """Load advice/geometry prerequisites from direction denorm in one SQL round-trip (#130)."""
     started = time.perf_counter()
     rows = (
         session.execute(
@@ -646,15 +654,13 @@ def load_advice_route_context(
         .all()
     )
     if timings is not None:
-        elapsed = round((time.perf_counter() - started) * 1000)
         timings["version_ms"] = 0
         timings["membership_ms"] = 0
-        timings["segments_ms"] = elapsed
+        timings["direction_ms"] = round((time.perf_counter() - started) * 1000)
 
     if not rows:
         if timings is not None:
-            timings["segment_count"] = 0
-            timings["geometry_bytes"] = 0
+            timings["advice_segments_count"] = 0
             timings["assemble_ms"] = 0
         return AdviceRouteContextRow(status="route_not_found")
 
@@ -667,36 +673,16 @@ def load_advice_route_context(
     )
     if status != "ok":
         if timings is not None:
-            timings["segment_count"] = 0
-            timings["geometry_bytes"] = 0
+            timings["advice_segments_count"] = 0
             timings["assemble_ms"] = 0
         return AdviceRouteContextRow(status=status)
 
     assemble_started = time.perf_counter()
-    segment_count = 0
-    geometry_bytes = 0
-    segments_list: list[RouteSegmentRow] = []
-    for row in rows:
-        if row["public_id"] is None:
-            continue
-        geometry_text = str(row["geometry"])
-        segment_count += 1
-        geometry_bytes += len(geometry_text.encode("utf-8"))
-        segments_list.append(
-            RouteSegmentRow(
-                public_id=str(row["public_id"]),
-                sequence=int(row["sequence"]),
-                geometry=geometry_text,
-                bearing_degrees=float(row["bearing_degrees"]),
-                distance_meters=float(row["distance_meters"]),
-                cumulative_distance_meters=float(row["cumulative_distance_meters"]),
-            )
-        )
+    segments = _segments_from_advice_denorm(rows[0]["advice_segments"])
     if timings is not None:
-        timings["segment_count"] = segment_count
-        timings["geometry_bytes"] = geometry_bytes
+        timings["advice_segments_count"] = len(segments)
         timings["assemble_ms"] = round((time.perf_counter() - assemble_started) * 1000)
-    return AdviceRouteContextRow(status="ok", segments=tuple(segments_list))
+    return AdviceRouteContextRow(status="ok", segments=segments)
 
 
 def _direction_hints_by_version(
