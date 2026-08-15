@@ -14,7 +14,7 @@ def test_migrate_applies_alembic_revision_and_is_idempotent(store: GenerationSto
 
     with store.connection() as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version == ("20260731_0001",)
+        assert version == ("20260815_0002",)
         for table in (
             "dataset_generations",
             "dataset_pointers",
@@ -60,7 +60,7 @@ def test_migrate_prefers_store_url_over_conflicting_ambient_database_url(
 
     with store.connection() as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert version == ("20260731_0001",)
+        assert version == ("20260815_0002",)
 
 
 def test_migrate_preserves_app_log_level(database_url: str, caplog: pytest.LogCaptureFixture):
