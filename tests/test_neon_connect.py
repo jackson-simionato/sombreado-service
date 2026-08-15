@@ -109,7 +109,7 @@ def test_migrate_uses_unpooled_url_when_set(database_url: str, monkeypatch: pyte
     verify = GenerationStore(database_url)
     with verify.connection() as connection:
         version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert version == ("20260731_0001",)
+    assert version == ("20260815_0002",)
 
 
 def test_readme_documents_pooled_runtime_and_unpooled_migrate():

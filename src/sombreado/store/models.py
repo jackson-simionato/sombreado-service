@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from geoalchemy2 import Geography
 from sqlalchemy import Float, ForeignKey, Integer, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -45,6 +46,7 @@ class RouteDirectionRecord(Base):
     direction_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     sequence: Mapped[int] = mapped_column(Integer)
     geometry: Mapped[str] = mapped_column(Text)
+    advice_segments: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
 
 class ServiceDirectionRecord(Base):

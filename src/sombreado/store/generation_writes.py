@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
 import psycopg
+from psycopg.types.json import Json
 
 CanonicalRows: TypeAlias = Mapping[str, Sequence[Mapping[str, object]]]
 
@@ -39,7 +40,11 @@ def insert_staged_rows(
     insert_routes(connection, rows["routes"])
     insert_generation_routes(connection, generation_id, rows["routes"])
     insert_route_versions(connection, rows["route_versions"])
-    insert_route_directions(connection, rows["route_directions"])
+    insert_route_directions(
+        connection,
+        rows["route_directions"],
+        advice_segments_by_direction(rows["route_segments"]),
+    )
     insert_service_directions(connection, rows["service_directions"])
     insert_segments(connection, rows["route_segments"])
     insert_membership(connection, generation_id, rows["route_versions"])
@@ -156,14 +161,48 @@ def insert_route_versions(connection: psycopg.Connection, rows: Sequence[Mapping
         )
 
 
-def insert_route_directions(connection: psycopg.Connection, rows: Sequence[Mapping[str, object]]) -> None:
+def advice_segments_by_direction(
+    segment_rows: Sequence[Mapping[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    """Derive each direction's passenger advice denorm from its ordered segment rows."""
+    grouped: dict[str, list[Mapping[str, object]]] = {}
+    for row in segment_rows:
+        grouped.setdefault(str(row["route_direction_id"]), []).append(row)
+    return {
+        direction_id: [
+            {
+                "public_id": str(segment["id"]),
+                "sequence": int(segment["sequence"]),
+                "coordinates": _linestring_coordinates(str(segment["geometry"])),
+                "bearing_degrees": float(segment["bearing_degrees"]),
+                "distance_meters": float(segment["distance_meters"]),
+                "cumulative_distance_meters": float(segment["cumulative_distance_meters"]),
+            }
+            for segment in sorted(segments, key=lambda item: int(item["sequence"]))
+        ]
+        for direction_id, segments in grouped.items()
+    }
+
+
+def _linestring_coordinates(geometry: str) -> list[list[float]]:
+    body = geography_wkt(geometry).split(";", 1)[1]
+    inner = body[body.index("(") + 1 : body.rindex(")")]
+    return [[float(point.split()[0]), float(point.split()[1])] for point in inner.split(",")]
+
+
+def insert_route_directions(
+    connection: psycopg.Connection,
+    rows: Sequence[Mapping[str, object]],
+    advice_segments: Mapping[str, Sequence[Mapping[str, object]]],
+) -> None:
     with connection.cursor() as cursor:
         cursor.executemany(
             """
             INSERT INTO route_directions(
-                id, route_version_id, name, direction_kind, sequence, geometry
+                id, route_version_id, name, direction_kind, sequence, geometry, advice_segments
             ) VALUES (
-                %(id)s, %(route_version_id)s, %(name)s, %(direction_kind)s, %(sequence)s, %(geometry)s
+                %(id)s, %(route_version_id)s, %(name)s, %(direction_kind)s, %(sequence)s,
+                %(geometry)s, %(advice_segments)s
             )
             """,
             [
@@ -174,6 +213,7 @@ def insert_route_directions(connection: psycopg.Connection, rows: Sequence[Mappi
                     "direction_kind": row["direction_kind"],
                     "sequence": row["sequence"],
                     "geometry": row["geometry"],
+                    "advice_segments": Json(advice_segments.get(str(row["id"]), [])),
                 }
                 for row in rows
             ],
@@ -398,6 +438,25 @@ def validate_generation(connection: psycopg.Connection, generation_id: str) -> N
     ).fetchone()
     if invalid_membership is not None and int(invalid_membership[0]):
         raise RuntimeError(f"generation route/version membership is invalid: {generation_id}")
+
+    mismatch = connection.execute(
+        """
+        SELECT count(*)
+        FROM dataset_route_versions AS member
+        JOIN route_directions AS direction
+            ON direction.route_version_id = member.route_version_id
+        WHERE member.generation_id = %(id)s
+          AND jsonb_array_length(direction.advice_segments)
+              <> (
+                  SELECT count(*)
+                  FROM route_segments AS segment
+                  WHERE segment.route_direction_id = direction.id
+              )
+        """,
+        {"id": generation_id},
+    ).fetchone()
+    if mismatch is not None and int(mismatch[0]):
+        raise RuntimeError(f"generation advice_segments denorm mismatch: {generation_id}")
 
 
 def pointer(connection: psycopg.Connection, role: str) -> str | None:
