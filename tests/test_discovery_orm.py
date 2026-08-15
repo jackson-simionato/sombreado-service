@@ -11,10 +11,12 @@ from sombreado.store.discovery import (
     current_route_segments_statement,
     current_route_version_statement,
     departure_labels_statement,
+    direction_choices_for_route_statement,
     direction_choices_statement,
     direction_hints_statement,
     nearby_route_candidates_statement,
     route_direction_membership_statement,
+    route_geometry_context_statement,
     search_route_candidates_statement,
     search_route_candidates_with_hints_statement,
 )
@@ -81,6 +83,21 @@ def test_direction_choices_statement_joins_current_pointer():
     assert "FROM route_directions JOIN dataset_route_versions" in sql
     assert "WHERE route_directions.route_version_id = 'version-a'" in sql
     assert "ORDER BY route_directions.sequence ASC" in sql
+
+
+def test_direction_choices_for_route_statement_joins_current_pointer():
+    sql = _assert_orm_current_pointer(direction_choices_for_route_statement(route_id="route-a"))
+    assert "dataset_route_versions" in sql
+    assert "route_directions" in sql
+    assert "service_directions" in sql
+    assert "WHERE dataset_route_versions.route_id = 'route-a'" in sql
+
+
+def test_route_geometry_context_statement_joins_current_pointer():
+    sql = _assert_orm_current_pointer(route_geometry_context_statement(route_id="route-a", route_direction_id="dir-a"))
+    assert "route_segments" in sql
+    assert "route_directions" in sql
+    assert "WHERE dataset_route_versions.route_id = 'route-a'" in sql
 
 
 def test_current_route_version_statement_joins_current_pointer():

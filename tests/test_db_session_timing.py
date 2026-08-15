@@ -51,41 +51,72 @@ class _FakeResultWithFirst(_FakeResult):
 
 
 class _VersionThenEmptySession:
-    """Version lookup returns an id; later executes return empty directions/labels."""
+    """One combined execute: current version with no directions (empty choices)."""
 
     def __init__(self) -> None:
         self.connection_calls = 0
-        self._calls = 0
 
     def connection(self):
         self.connection_calls += 1
         return object()
 
     def execute(self, *_args, **_kwargs):
-        self._calls += 1
-        if self._calls == 1:
-            return _FakeResultWithFirst(("00000000-0000-0000-0000-000000000002",))
-        return _FakeResult()
+        return _MappingResult(
+            [
+                {
+                    "route_version_id": "00000000-0000-0000-0000-000000000002",
+                    "route_direction_id": None,
+                    "sequence": None,
+                    "name": None,
+                    "direction_kind": None,
+                    "departure_label": None,
+                }
+            ]
+        )
+
+
+class _MappingResult:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class _AdviceOkFakeSession:
-    """Version match + membership hit + empty segments (three executes)."""
+    """One combined execute: matching version + membership + empty segments."""
 
     def __init__(self) -> None:
         self.connection_calls = 0
-        self._calls = 0
 
     def connection(self):
         self.connection_calls += 1
         return object()
 
     def execute(self, *_args, **_kwargs):
-        self._calls += 1
-        if self._calls == 1:
-            return _FakeResultWithFirst(("00000000-0000-0000-0000-000000000002",))
-        if self._calls == 2:
-            return _FakeResultWithFirst(("00000000-0000-0000-0000-000000000003",))
-        return _FakeResult()
+        return _MappingResult(
+            [
+                {
+                    "route_version_id": "00000000-0000-0000-0000-000000000002",
+                    "route_direction_id": "00000000-0000-0000-0000-000000000003",
+                    "public_id": None,
+                    "sequence": None,
+                    "geometry": None,
+                    "bearing_degrees": None,
+                    "distance_meters": None,
+                    "cumulative_distance_meters": None,
+                }
+            ]
+        )
 
 
 @pytest.mark.asyncio
