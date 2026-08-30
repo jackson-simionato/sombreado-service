@@ -261,6 +261,8 @@ meaning from them.
       "directSunExposure": "left",
       "recommendedSeatArea": "right",
       "sunCondition": "daylight",
+      "exposureShares": {"left": 100, "right": 0, "none": 0},
+      "horizonFlip": false,
       "computedAt": "2026-01-15T15:00:00Z",
       "position": {
         "lat": -27.6,
@@ -299,6 +301,8 @@ meaning from them.
       "directSunExposure": "right",
       "recommendedSeatArea": "left",
       "sunCondition": "daylight",
+      "exposureShares": {"left": 0, "right": 100, "none": 0},
+      "horizonFlip": false,
       "computedAt": "2026-01-15T15:00:00Z",
       "position": {
         "lat": -27.6,
@@ -315,6 +319,8 @@ meaning from them.
   - Missing current directions return `404 routeDirectionNotFound`.
   - `sunCondition` describes the selected Advice Horizon as `night`, `lowSun`, `daylight`, or `overhead`.
   - `recommendedSeatArea` is produced by the backend as `left`, `right`, `front`, `back`, or `neutral`; the browser should not derive it from raw exposure fields.
+  - `exposureShares` is the selected horizon split into integer `left`, `right`, and `none` percents that sum to 100. Night, overhead, front, and back count as `none`.
+  - `horizonFlip` is true when both left and right have a non-zero share; the backend then returns `recommendedSeatArea: "neutral"` instead of forcing one side.
   - Example withheld response:
     ```json
     {

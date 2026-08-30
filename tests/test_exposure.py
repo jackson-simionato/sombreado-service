@@ -135,3 +135,170 @@ def test_summarize_advice_horizon_uses_dominant_distance_weighted_sun_condition(
     assert summary.total_distance_meters == 210
     assert summary.direct_sun_exposure is ExposureDirection.right
     assert summary.sun_condition is SunCondition.daylight
+
+
+def _eastbound_segment(*, segment_id: str, sequence: int, distance_meters: float) -> SegmentForAdvice:
+    return SegmentForAdvice(
+        segment_id=segment_id,
+        sequence=sequence,
+        midpoint_lat=-27.6,
+        midpoint_lng=-48.5,
+        bearing_degrees=90,
+        distance_meters=distance_meters,
+        cumulative_distance_meters=distance_meters,
+    )
+
+
+def test_summarize_advice_horizon_reports_left_right_none_shares_summing_to_100():
+    summary = exposure.summarize_advice_horizon(
+        segments=[
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000001",
+                sequence=1,
+                distance_meters=100,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000002",
+                sequence=2,
+                distance_meters=200,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000003",
+                sequence=3,
+                distance_meters=100,
+            ),
+        ],
+        sun_positions=[
+            SunPosition(azimuth=45, elevation=35),
+            SunPosition(azimuth=135, elevation=35),
+            SunPosition(azimuth=90, elevation=35),
+        ],
+    )
+
+    shares = summary.exposure_shares
+    assert shares.left == 25
+    assert shares.right == 50
+    assert shares.none == 25
+    assert shares.left + shares.right + shares.none == 100
+
+
+def test_summarize_advice_horizon_puts_night_overhead_front_and_back_in_none_share():
+    summary = exposure.summarize_advice_horizon(
+        segments=[
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000001",
+                sequence=1,
+                distance_meters=40,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000002",
+                sequence=2,
+                distance_meters=30,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000003",
+                sequence=3,
+                distance_meters=20,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000004",
+                sequence=4,
+                distance_meters=10,
+            ),
+        ],
+        sun_positions=[
+            SunPosition(azimuth=90, elevation=-1),
+            SunPosition(azimuth=90, elevation=70),
+            SunPosition(azimuth=90, elevation=35),
+            SunPosition(azimuth=270, elevation=35),
+        ],
+    )
+
+    assert summary.direct_sun_exposure is ExposureDirection.none
+    assert summary.exposure_shares.left == 0
+    assert summary.exposure_shares.right == 0
+    assert summary.exposure_shares.none == 100
+    assert summary.horizon_flip is False
+
+
+def test_summarize_advice_horizon_flags_flip_when_left_and_right_both_have_share():
+    summary = exposure.summarize_advice_horizon(
+        segments=[
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000001",
+                sequence=1,
+                distance_meters=100,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000002",
+                sequence=2,
+                distance_meters=200,
+            ),
+        ],
+        sun_positions=[
+            SunPosition(azimuth=45, elevation=35),
+            SunPosition(azimuth=135, elevation=35),
+        ],
+    )
+
+    assert summary.exposure_shares.left == 33
+    assert summary.exposure_shares.right == 67
+    assert summary.exposure_shares.none == 0
+    assert summary.horizon_flip is True
+
+
+def test_summarize_advice_horizon_does_not_flag_flip_when_only_one_side_has_share():
+    summary = exposure.summarize_advice_horizon(
+        segments=[
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000001",
+                sequence=1,
+                distance_meters=100,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000002",
+                sequence=2,
+                distance_meters=50,
+            ),
+        ],
+        sun_positions=[
+            SunPosition(azimuth=45, elevation=35),
+            SunPosition(azimuth=90, elevation=35),
+        ],
+    )
+
+    assert summary.exposure_shares.left == 67
+    assert summary.exposure_shares.right == 0
+    assert summary.exposure_shares.none == 33
+    assert summary.horizon_flip is False
+
+
+def test_summarize_advice_horizon_rounds_shares_to_integers_that_sum_to_100():
+    summary = exposure.summarize_advice_horizon(
+        segments=[
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000001",
+                sequence=1,
+                distance_meters=1,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000002",
+                sequence=2,
+                distance_meters=1,
+            ),
+            _eastbound_segment(
+                segment_id="00000000-0000-0000-0000-000000000003",
+                sequence=3,
+                distance_meters=1,
+            ),
+        ],
+        sun_positions=[
+            SunPosition(azimuth=45, elevation=35),
+            SunPosition(azimuth=135, elevation=35),
+            SunPosition(azimuth=90, elevation=35),
+        ],
+    )
+
+    shares = summary.exposure_shares
+    assert shares.left + shares.right + shares.none == 100
+    assert {shares.left, shares.right, shares.none} == {34, 33}

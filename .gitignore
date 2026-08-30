@@ -4,6 +4,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 .env
+.worktrees/
 data/
 *.sqlite
 *.sqlite-journal
