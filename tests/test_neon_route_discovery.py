@@ -413,6 +413,10 @@ async def test_advice_modes_and_horizons_use_current_geometry_from_neon(
     assert body["directSunExposure"] in {"left", "right", "front", "back", "overhead", "none"}
     assert body["recommendedSeatArea"] in {"left", "right", "front", "back", "neutral"}
     assert body["sunCondition"] in {"night", "lowSun", "daylight", "overhead"}
+    assert body["exposureShares"]["left"] + body["exposureShares"]["right"] + body["exposureShares"]["none"] == 100
+    assert isinstance(body["horizonFlip"], bool)
+    if body["horizonFlip"]:
+        assert body["recommendedSeatArea"] == "neutral"
     if mode == "preview":
         assert body["position"] == {
             "lat": -27.58967698020161,

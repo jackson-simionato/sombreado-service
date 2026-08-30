@@ -11,6 +11,7 @@ from sombreado.domain.schemas import (
     AdviceHorizon,
     AdviceMode,
     ExposureDirection,
+    HorizonExposureShares,
     RecommendedSeatArea,
     RouteDirectionKind,
     SunCondition,
@@ -111,6 +112,8 @@ class AdviceSuccess(BrowserSchema):
     direct_sun_exposure: ExposureDirection
     recommended_seat_area: RecommendedSeatArea
     sun_condition: SunCondition
+    exposure_shares: HorizonExposureShares
+    horizon_flip: bool
     computed_at: datetime
     position: AdvicePosition | None = None
 

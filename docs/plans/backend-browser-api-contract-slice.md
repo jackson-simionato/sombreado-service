@@ -56,6 +56,8 @@ The new public language is `Route Candidate`, `Direction Choice`, `Route Geometr
   - Treat this v1 recommendation mapping as deterministic service behavior even though the frontend consumes `recommendedSeatArea` directly instead of deriving it.
   - `sunCondition`: `night` when elevation < 0, `lowSun` when 0 <= elevation < 10, `overhead` when elevation >= 70, otherwise `daylight`.
   - Produce one internally consistent `directSunExposure`, `recommendedSeatArea`, and `sunCondition` for the selected horizon. Classify `sunCondition` from the dominant distance-weighted exposure sample for that horizon.
+  - Include `exposureShares` (`left` / `right` / `none` integers summing to 100) and `horizonFlip` for the same horizon. Bucket front, back, overhead, and night into `none` so percents do not invent a fake left/right at night.
+  - When `horizonFlip` is true, `recommendedSeatArea` is `neutral`; otherwise keep the existing seat-area mapping. Clients still must not invert `recommendedSeatArea` from `directSunExposure`.
   - If the selected horizon has no computable distance, return withheld with `reasonCode: "noAdviceForSelectedHorizon"`.
   - Night is successful neutral advice, not withheld.
 - Standardize public errors:
