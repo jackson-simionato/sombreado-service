@@ -13,6 +13,45 @@ from sombreado.ingestion.domain import (
 
 TERMINAL_TOKENS = ("ticen", "titri", "tican", "tirio", "tilag", "tisan", "terminal")
 _DIRECTION_KIND_PATTERN = re.compile(r"\b(ida|volta)\b", re.IGNORECASE)
+_PUBLIC_MATCH_CONFIDENCES = {DirectionMatchConfidence.HIGH, DirectionMatchConfidence.MEDIUM}
+
+
+def passenger_facing_direction_names(
+    *,
+    route_code: str,
+    route_directions: list[RouteDirection],
+    service_directions: list[ServiceDirection],
+    matches: list[ServiceDirectionMatch],
+) -> list[str]:
+    match_by_service = {match.service_direction_sequence: match for match in matches}
+    origin_by_route_sequence: dict[int, str] = {}
+    for service in sorted(service_directions, key=lambda item: item.sequence):
+        match = match_by_service.get(service.sequence)
+        if (
+            match is None
+            or match.route_direction_sequence is None
+            or match.confidence not in _PUBLIC_MATCH_CONFIDENCES
+            or match.route_direction_sequence in origin_by_route_sequence
+        ):
+            continue
+        origin_by_route_sequence[match.route_direction_sequence] = service.departure_label
+
+    origins = [origin_by_route_sequence.get(index) for index in range(1, len(route_directions) + 1)]
+    has_origin_destination_pair = (
+        len(origins) == 2 and bool(origins[0]) and bool(origins[1]) and origins[0] != origins[1]
+    )
+    names: list[str] = []
+    for index, direction in enumerate(route_directions):
+        origin = origins[index]
+        if has_origin_destination_pair:
+            names.append(f"{origin} → {origins[1 - index]}")
+        elif origin:
+            names.append(origin)
+        elif direction.direction_kind:
+            names.append(f"{route_code} - {direction.direction_kind.title()}")
+        else:
+            names.append(direction.name)
+    return names
 
 
 def classify_route_direction_pair(route_directions: list[RouteDirection]) -> None:
@@ -46,6 +85,24 @@ def infer_service_direction_matches(
     first, second = services
     first_terminal = _looks_like_terminal_departure(first.departure_label)
     second_terminal = _looks_like_terminal_departure(second.departure_label)
+
+    if first_terminal and second_terminal and _normalize(first.departure_label) != _normalize(second.departure_label):
+        return [
+            _matched(
+                first.sequence,
+                ida_sequence,
+                DirectionMatchConfidence.MEDIUM,
+                DirectionMatchMethod.SEQUENCE_IDA_VOLTA,
+                {"departure_label": first.departure_label},
+            ),
+            _matched(
+                second.sequence,
+                volta_sequence,
+                DirectionMatchConfidence.MEDIUM,
+                DirectionMatchMethod.SEQUENCE_IDA_VOLTA,
+                {"departure_label": second.departure_label},
+            ),
+        ]
 
     if first_terminal != second_terminal:
         return [

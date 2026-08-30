@@ -147,7 +147,7 @@ meaning from them.
   - `distanceMeters` is the nearest current segment-geometry distance for the route.
   - Geometry-less current routes are not returned by nearby discovery.
   - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
-  - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
+  - Direction hints include only linked service directions with high or medium direction-match confidence. Two-terminal pairs such as TICEN and TITRI match at medium confidence, so they appear as Direction Hints after scrape. Empty `directionHints` is valid when the current route has no high/medium matched Service Directions (unmatched or low-confidence Departure Labels, or none).
   - Route candidates do not include selectable direction identifiers.
   - Example response:
     ```json
@@ -171,7 +171,7 @@ meaning from them.
     - `limit`: optional route candidate limit, defaults to `8`, max `100`.
   - Returns `{ "routes": [...] }` with camelCase Route Candidate fields: `routeId`, `routeVersionId`, `routeCode`, `routeName`, and `directionHints`.
   - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
-  - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
+  - Direction hints include only linked service directions with high or medium direction-match confidence. Empty `directionHints` is valid when the current route has no high/medium matched Service Directions; the Route Candidate can still appear in search, and Direction Choices then carry passenger-facing names.
   - Route candidates do not include selectable direction identifiers.
   - Example response:
     ```json
@@ -190,7 +190,9 @@ meaning from them.
 - `GET /v1/routes/{routeId}/directions?routeVersionId={routeVersionId}`
   - Returns selectable current Direction Choices for one selected Route Candidate.
   - When omitted, `routeVersionId` resolves to the route's latest current version. When supplied, stale saved selections are rejected explicitly.
-  - Returns `{ "routeVersionId": "...", "directions": [...] }`, with the resolved current version and each choice's `routeDirectionId`, `sequence`, `name`, and `departureLabels`.
+  - Returns `{ "routeVersionId": "...", "directions": [...] }`, with the resolved current version and each choice's `routeDirectionId`, `sequence`, `name`, `directionKind`, and `departureLabels`.
+  - `name` is a passenger-facing origin→destination label from public Departure Labels when scrape matching knows both ends (for example `TICEN → TITRI`), otherwise the public Departure Label, otherwise `{code} - Ida` / `{code} - Volta`.
+  - `directionKind` is `"ida"`, `"volta"`, or `null` from scraper classification. It is not inferred from `name` or `departureLabels`.
   - `departureLabels` follow the same high/medium confidence linked service-direction semantics as Direction Hints; empty `departureLabels` is valid.
   - Missing current routes return `404 routeNotFound`.
   - Stale route versions return `409 routeVersionStale`.
@@ -203,7 +205,8 @@ meaning from them.
         {
           "routeDirectionId": "00000000-0000-0000-0000-000000000003",
           "sequence": 1,
-          "name": "Centro",
+          "name": "TICEN → TITRI",
+          "directionKind": "ida",
           "departureLabels": ["TICEN"]
         }
       ]

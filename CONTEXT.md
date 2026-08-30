@@ -85,8 +85,8 @@ A non-selectable departure label shown on a route candidate to help a passenger 
 _Avoid_: Direction choice, direction identifier, route direction name
 
 **Direction Choice**:
-A selectable current route direction for a selected route candidate. Its usability comes from current route-direction data, not from departure-label or geometry availability.
-_Avoid_: Segment geometry, service timetable
+A selectable current route direction for a selected route candidate. Its public name uses terminals or Departure Labels when scrape matching knows them (for example `TICEN → TITRI`), otherwise `{code} - Ida` / `{code} - Volta`. Its usability comes from current route-direction data, not from departure-label or geometry availability.
+_Avoid_: Segment geometry, service timetable, raw KML ida/volta string as the passenger-facing name when terminals are known
 
 **Route Direction Kind**:
 An optional semantic classification of a Direction Choice as `ida` or `volta`, supplied by the scraper only for an unambiguous route-direction pair.
