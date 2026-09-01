@@ -147,7 +147,7 @@ meaning from them.
   - `distanceMeters` is the nearest current segment-geometry distance for the route.
   - Geometry-less current routes are not returned by nearby discovery.
   - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
-  - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
+  - Direction hints include only linked service directions with high or medium direction-match confidence. Two-terminal pairs such as TICEN and TITRI match at medium confidence, so they appear as Direction Hints after scrape. Empty `directionHints` is valid when the current route has no high/medium matched Service Directions (unmatched or low-confidence Departure Labels, or none).
   - Route candidates do not include selectable direction identifiers.
   - Example response:
     ```json
@@ -171,7 +171,7 @@ meaning from them.
     - `limit`: optional route candidate limit, defaults to `8`, max `100`.
   - Returns `{ "routes": [...] }` with camelCase Route Candidate fields: `routeId`, `routeVersionId`, `routeCode`, `routeName`, and `directionHints`.
   - Direction hints are de-duplicated departure labels ordered by route direction sequence and service direction sequence.
-  - Direction hints include only linked service directions with high or medium direction-match confidence; empty `directionHints` is valid.
+  - Direction hints include only linked service directions with high or medium direction-match confidence. Empty `directionHints` is valid when the current route has no high/medium matched Service Directions; the Route Candidate can still appear in search, and Direction Choices then carry passenger-facing names.
   - Route candidates do not include selectable direction identifiers.
   - Example response:
     ```json
@@ -190,7 +190,9 @@ meaning from them.
 - `GET /v1/routes/{routeId}/directions?routeVersionId={routeVersionId}`
   - Returns selectable current Direction Choices for one selected Route Candidate.
   - When omitted, `routeVersionId` resolves to the route's latest current version. When supplied, stale saved selections are rejected explicitly.
-  - Returns `{ "routeVersionId": "...", "directions": [...] }`, with the resolved current version and each choice's `routeDirectionId`, `sequence`, `name`, and `departureLabels`.
+  - Returns `{ "routeVersionId": "...", "directions": [...] }`, with the resolved current version and each choice's `routeDirectionId`, `sequence`, `name`, `directionKind`, and `departureLabels`.
+  - `name` is a passenger-facing origin→destination label from public Departure Labels when scrape matching knows both ends (for example `TICEN → TITRI`), otherwise the public Departure Label, otherwise `{code} - Ida` / `{code} - Volta`.
+  - `directionKind` is `"ida"`, `"volta"`, or `null` from scraper classification. It is not inferred from `name` or `departureLabels`.
   - `departureLabels` follow the same high/medium confidence linked service-direction semantics as Direction Hints; empty `departureLabels` is valid.
   - Missing current routes return `404 routeNotFound`.
   - Stale route versions return `409 routeVersionStale`.
@@ -203,7 +205,8 @@ meaning from them.
         {
           "routeDirectionId": "00000000-0000-0000-0000-000000000003",
           "sequence": 1,
-          "name": "Centro",
+          "name": "TICEN → TITRI",
+          "directionKind": "ida",
           "departureLabels": ["TICEN"]
         }
       ]
@@ -261,6 +264,8 @@ meaning from them.
       "directSunExposure": "left",
       "recommendedSeatArea": "right",
       "sunCondition": "daylight",
+      "exposureShares": {"left": 100, "right": 0, "none": 0},
+      "horizonFlip": false,
       "computedAt": "2026-01-15T15:00:00Z",
       "position": {
         "lat": -27.6,
@@ -299,6 +304,8 @@ meaning from them.
       "directSunExposure": "right",
       "recommendedSeatArea": "left",
       "sunCondition": "daylight",
+      "exposureShares": {"left": 0, "right": 100, "none": 0},
+      "horizonFlip": false,
       "computedAt": "2026-01-15T15:00:00Z",
       "position": {
         "lat": -27.6,
@@ -315,6 +322,8 @@ meaning from them.
   - Missing current directions return `404 routeDirectionNotFound`.
   - `sunCondition` describes the selected Advice Horizon as `night`, `lowSun`, `daylight`, or `overhead`.
   - `recommendedSeatArea` is produced by the backend as `left`, `right`, `front`, `back`, or `neutral`; the browser should not derive it from raw exposure fields.
+  - `exposureShares` is the selected horizon split into integer `left`, `right`, and `none` percents that sum to 100. Night, overhead, front, and back count as `none`.
+  - `horizonFlip` is true when both left and right have a non-zero share; the backend then returns `recommendedSeatArea: "neutral"` instead of forcing one side.
   - Example withheld response:
     ```json
     {

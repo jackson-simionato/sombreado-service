@@ -137,6 +137,8 @@ class FakeAdviceService:
                 "direct_sun_exposure": "right",
                 "recommended_seat_area": "left",
                 "sun_condition": "daylight",
+                "exposure_shares": {"left": 0, "right": 100, "none": 0},
+                "horizon_flip": False,
                 "computed_at": request.observed_at,
                 "position": {
                     "lat": -27.6,
@@ -155,6 +157,8 @@ class FakeAdviceService:
             "direct_sun_exposure": "left",
             "recommended_seat_area": "right",
             "sun_condition": "daylight",
+            "exposure_shares": {"left": 100, "right": 0, "none": 0},
+            "horizon_flip": False,
             "computed_at": datetime(2026, 1, 15, 15, tzinfo=UTC),
             "position": {
                 "lat": -27.6,
@@ -774,6 +778,28 @@ async def test_openapi_requires_nullable_direction_kind_with_supported_values():
     }
 
 
+@pytest.mark.asyncio
+async def test_openapi_requires_advice_exposure_shares_and_horizon_flip():
+    app = create_app()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schemas = response.json()["components"]["schemas"]
+    advice_success = schemas["AdviceSuccess"]
+    assert "exposureShares" in advice_success["required"]
+    assert "horizonFlip" in advice_success["required"]
+    assert "recommendedSeatArea" in advice_success["required"]
+    assert advice_success["properties"]["exposureShares"] == {"$ref": "#/components/schemas/HorizonExposureShares"}
+    assert advice_success["properties"]["horizonFlip"]["type"] == "boolean"
+    assert schemas["HorizonExposureShares"]["required"] == ["left", "right", "none"]
+    assert "sum to 100" in schemas["HorizonExposureShares"]["description"]
+    assert schemas["HorizonExposureShares"]["properties"]["left"]["type"] == "integer"
+    assert schemas["HorizonExposureShares"]["properties"]["right"]["type"] == "integer"
+    assert schemas["HorizonExposureShares"]["properties"]["none"]["type"] == "integer"
+
+
 def test_direction_choice_rejects_unsupported_direction_kind():
     with pytest.raises(ValueError, match="direction_kind"):
         DirectionChoice(
@@ -839,6 +865,8 @@ async def test_advice_endpoint_accepts_preview_contract_and_returns_camel_case()
         "directSunExposure": "left",
         "recommendedSeatArea": "right",
         "sunCondition": "daylight",
+        "exposureShares": {"left": 100, "right": 0, "none": 0},
+        "horizonFlip": False,
         "computedAt": "2026-01-15T15:00:00Z",
         "position": {
             "lat": -27.6,
@@ -892,6 +920,8 @@ async def test_advice_endpoint_accepts_onboard_contract_with_location():
         "directSunExposure": "right",
         "recommendedSeatArea": "left",
         "sunCondition": "daylight",
+        "exposureShares": {"left": 0, "right": 100, "none": 0},
+        "horizonFlip": False,
         "computedAt": "2026-01-15T15:00:00Z",
         "position": {
             "lat": -27.6,

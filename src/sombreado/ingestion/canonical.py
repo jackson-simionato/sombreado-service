@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from hashlib import sha256
 from uuid import UUID, uuid4, uuid5
 
+from sombreado.ingestion.directions import passenger_facing_direction_names
 from sombreado.ingestion.domain import (
     DirectionMatchConfidence,
     DirectionMatchMethod,
@@ -56,14 +57,23 @@ def snapshots_to_canonical_rows(snapshots: Sequence[RouteSnapshot]) -> Canonical
         )
 
         direction_id_by_sequence: dict[int, str] = {}
-        for index, direction in enumerate(snapshot.directions, start=1):
+        passenger_names = passenger_facing_direction_names(
+            route_code=route.code,
+            route_directions=snapshot.directions,
+            service_directions=route.service_directions,
+            matches=snapshot.direction_matches,
+        )
+        for index, (direction, name) in enumerate(
+            zip(snapshot.directions, passenger_names, strict=True),
+            start=1,
+        ):
             direction_id = str(uuid4())
             direction_id_by_sequence[index] = direction_id
             route_directions.append(
                 {
                     "id": direction_id,
                     "route_version_id": version_id,
-                    "name": direction.name,
+                    "name": name,
                     "direction_kind": direction.direction_kind,
                     "sequence": index,
                     "geometry": _linestring_wkt(direction),

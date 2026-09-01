@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ExposureDirection(StrEnum):
@@ -23,6 +23,20 @@ class RecommendedSeatArea(StrEnum):
     front = "front"
     back = "back"
     neutral = "neutral"
+
+
+class HorizonExposureShares(BaseModel):
+    """Distance-weighted percents of the selected horizon; left, right, and none sum to 100."""
+
+    left: int = Field(ge=0, le=100)
+    right: int = Field(ge=0, le=100)
+    none: int = Field(ge=0, le=100)
+
+    @model_validator(mode="after")
+    def must_sum_to_100(self) -> HorizonExposureShares:
+        if self.left + self.right + self.none != 100:
+            raise ValueError("exposure shares must sum to 100")
+        return self
 
 
 class SunCondition(StrEnum):
@@ -162,6 +176,8 @@ class AdviceSuccess(BaseModel):
     direct_sun_exposure: ExposureDirection
     recommended_seat_area: RecommendedSeatArea
     sun_condition: SunCondition
+    exposure_shares: HorizonExposureShares
+    horizon_flip: bool
     computed_at: datetime
     position: AdvicePosition | None = None
 

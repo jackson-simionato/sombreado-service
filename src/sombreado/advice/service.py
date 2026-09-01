@@ -2,7 +2,7 @@ from typing import Protocol
 from uuid import UUID
 
 from sombreado.advice.exposure import (
-    recommended_seat_area,
+    recommended_seat_area_for_horizon,
     summarize_advice_horizon,
     summarize_exposure_window,
     window_distance_meters,
@@ -309,8 +309,10 @@ def _build_advice_success(
         route_version_id=request.route_version_id,
         route_direction_id=request.route_direction_id,
         direct_sun_exposure=summary.direct_sun_exposure,
-        recommended_seat_area=recommended_seat_area(summary.direct_sun_exposure),
+        recommended_seat_area=recommended_seat_area_for_horizon(summary),
         sun_condition=summary.sun_condition,
+        exposure_shares=summary.exposure_shares,
+        horizon_flip=summary.horizon_flip,
         computed_at=request.observed_at,
         position=position,
     )

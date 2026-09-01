@@ -85,8 +85,8 @@ A non-selectable departure label shown on a route candidate to help a passenger 
 _Avoid_: Direction choice, direction identifier, route direction name
 
 **Direction Choice**:
-A selectable current route direction for a selected route candidate. Its usability comes from current route-direction data, not from departure-label or geometry availability.
-_Avoid_: Segment geometry, service timetable
+A selectable current route direction for a selected route candidate. Its public name uses terminals or Departure Labels when scrape matching knows them (for example `TICEN → TITRI`), otherwise `{code} - Ida` / `{code} - Volta`. Its usability comes from current route-direction data, not from departure-label or geometry availability.
+_Avoid_: Segment geometry, service timetable, raw KML ida/volta string as the passenger-facing name when terminals are known
 
 **Route Direction Kind**:
 An optional semantic classification of a Direction Choice as `ida` or `volta`, supplied by the scraper only for an unambiguous route-direction pair.
@@ -127,6 +127,14 @@ _Avoid_: Raw solar elevation, azimuth debug value
 **Seat-area Recommendation**:
 The passenger-facing seating area suggested by Advice to reduce direct sun exposure, such as left, right, front, back, or neutral.
 _Avoid_: Seat-side recommendation, frontend-derived recommendation, raw exposure inversion
+
+**Horizon Exposure Shares**:
+Integer percentages of the selected Advice Horizon with direct sun on the passenger left, right, or neither. Night, overhead, front, and back count as neither. The three values sum to 100.
+_Avoid_: Weather shade, building occlusion, invented left/right at night
+
+**Horizon Flip**:
+Whether both left and right have a non-zero Horizon Exposure Share, so the Seat-area Recommendation is Neutral rather than a single side for the whole window.
+_Avoid_: Weather change, client-inverted recommendation
 
 **Request Access Log**:
 One log record per completed inbound HTTP request to the passenger API, carrying method, path, status, duration, Response Duration Class, and request id. It is not a scrape job log and never includes passenger coordinates, query strings, or bodies.
@@ -176,6 +184,7 @@ _Avoid_: Percentile SLO, apdex score, scrape job duration
 - Preview **Advice Position** uses the selected direction start.
 - A **Sun Condition** describes the selected **Advice Horizon**, not individual route segments.
 - A **Seat-area Recommendation** is produced by **Advice** and is not derived by the browser client.
+- **Horizon Exposure Shares** and **Horizon Flip** describe the same selected **Advice Horizon** as that Seat-area Recommendation.
 - A **Render Deployment** runs the passenger API; scrape publishes against Neon from GitHub Actions.
 - A **Pipeline Secret** belongs in GitHub Actions when CI/CD needs it (deploy hook / Neon writer credentials).
 - A **Runtime Secret** belongs on Render when the API process needs it (Neon pooled `DATABASE_URL`; optional direct `DATABASE_URL_UNPOOLED` for migrate).

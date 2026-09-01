@@ -13,6 +13,7 @@ from sombreado.domain.schemas import (
     AdviceMode,
     ExposureDirection,
     OnboardAdviceRequest,
+    RecommendedSeatArea,
     RouteSegment,
 )
 from sombreado.route_reads.current import AdviceRouteContext
@@ -411,3 +412,82 @@ async def test_onboard_advice_off_route_fallback_preserves_preview_withheld_for_
     assert response.mode is AdviceMode.preview
     assert response.horizon is AdviceHorizon.upcoming
     assert response.reason_code == "noAdviceForSelectedHorizon"
+
+
+async def test_preview_advice_includes_horizon_shares_without_inventing_left_right_at_night(monkeypatch):
+    service = AdviceService(route_service=PreviewRouteService(), settings=Settings())
+    monkeypatch.setattr(
+        "sombreado.advice.service.sun_position",
+        lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 90, "elevation": -1})(),
+    )
+
+    response = await service.build_advice(_advice_request())
+
+    assert response.status == "advice"
+    assert response.direct_sun_exposure is ExposureDirection.none
+    assert response.recommended_seat_area is RecommendedSeatArea.neutral
+    assert response.exposure_shares.left == 0
+    assert response.exposure_shares.right == 0
+    assert response.exposure_shares.none == 100
+    assert response.horizon_flip is False
+
+
+async def test_preview_advice_keeps_front_to_back_mapping_with_none_share(monkeypatch):
+    service = AdviceService(route_service=PreviewRouteService(), settings=Settings())
+    monkeypatch.setattr(
+        "sombreado.advice.service.sun_position",
+        lambda *, lat, lng, dt: type("Sun", (), {"azimuth": 90, "elevation": 35})(),
+    )
+
+    response = await service.build_advice(_advice_request())
+
+    assert response.status == "advice"
+    assert response.direct_sun_exposure is ExposureDirection.front
+    assert response.recommended_seat_area is RecommendedSeatArea.back
+    assert response.exposure_shares.left == 0
+    assert response.exposure_shares.right == 0
+    assert response.exposure_shares.none == 100
+    assert response.horizon_flip is False
+
+
+async def test_preview_advice_uses_neutral_seat_area_when_horizon_flips_sides(monkeypatch):
+    service = AdviceService(
+        route_service=PreviewRouteService(
+            segments=[
+                RouteSegment(
+                    id="00000000-0000-0000-0000-000000000004",
+                    sequence=1,
+                    coordinates=[(-48.5, -27.6), (-48.49, -27.6)],
+                    bearing_degrees=90,
+                    distance_meters=100,
+                    cumulative_distance_meters=100,
+                ),
+                RouteSegment(
+                    id="00000000-0000-0000-0000-000000000005",
+                    sequence=2,
+                    coordinates=[(-48.49, -27.6), (-48.48, -27.6)],
+                    bearing_degrees=90,
+                    distance_meters=200,
+                    cumulative_distance_meters=300,
+                ),
+            ]
+        ),
+        settings=Settings(),
+    )
+    sun_samples = iter(
+        [
+            type("Sun", (), {"azimuth": 45, "elevation": 35})(),
+            type("Sun", (), {"azimuth": 135, "elevation": 35})(),
+        ]
+    )
+    monkeypatch.setattr("sombreado.advice.service.sun_position", lambda *, lat, lng, dt: next(sun_samples))
+
+    response = await service.build_advice(_advice_request())
+
+    assert response.status == "advice"
+    assert response.direct_sun_exposure is ExposureDirection.right
+    assert response.recommended_seat_area is RecommendedSeatArea.neutral
+    assert response.exposure_shares.left == 33
+    assert response.exposure_shares.right == 67
+    assert response.exposure_shares.none == 0
+    assert response.horizon_flip is True
